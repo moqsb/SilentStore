@@ -1,0 +1,6 @@
+SilentStore is designed for local-first security.
+
+Your files are encrypted on this device using AES-256.
+The encryption key is protected by the Secure Enclave and never leaves your device.
+
+SilentStore does not upload, share, or sell your content.

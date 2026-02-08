@@ -14,9 +14,18 @@ struct PersistenceController {
     static let preview: PersistenceController = {
         let result = PersistenceController(inMemory: true)
         let viewContext = result.container.viewContext
-        for _ in 0..<10 {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
+        for index in 0..<8 {
+            let entity = VaultEntity(context: viewContext)
+            entity.id = UUID()
+            entity.originalName = "Sample-\(index).txt"
+            entity.mimeType = "text/plain"
+            entity.size = 128
+            entity.createdAt = Date()
+            entity.fileName = UUID().uuidString
+            entity.category = index % 2 == 0 ? "Notes" : "Reports"
+            entity.folder = entity.category
+            entity.sha256 = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            entity.isImage = false
         }
         do {
             try viewContext.save()

@@ -9,78 +9,90 @@ import SwiftUI
 import CoreData
 
 struct ContentView: View {
-    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var authManager = AuthManager()
+    @StateObject private var permissionsManager = PermissionsManager()
+    @StateObject private var vaultStore: VaultStore
+    @State private var showPermissions = false
+    @AppStorage("faceIdEnabled") private var faceIdEnabled = true
+    @AppStorage("didOnboard") private var didOnboard = false
+    @State private var isUnlocking = false
 
-    @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)],
-        animation: .default)
-    private var items: FetchedResults<Item>
+    init(context: NSManagedObjectContext = PersistenceController.shared.container.viewContext) {
+        _vaultStore = StateObject(wrappedValue: VaultStore(context: context))
+    }
 
     var body: some View {
-        NavigationView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp!, formatter: itemFormatter)")
-                    } label: {
-                        Text(item.timestamp!, formatter: itemFormatter)
-                    }
-                }
-                .onDelete(perform: deleteItems)
+        ZStack {
+            if didOnboard {
+                VaultHomeView(vaultStore: vaultStore)
+                    .environmentObject(vaultStore)
+                    .opacity(shouldHideContent ? 0 : 1)
+                    .allowsHitTesting(!shouldHideContent)
+            } else {
+                OnboardingView()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
+
+            if shouldHideContent {
+                AppTheme.gradients.background
+                    .ignoresSafeArea()
+                VStack(spacing: 16) {
+                    ZStack {
+                        Circle()
+                            .fill(AppTheme.colors.cardBackground)
+                            .frame(width: 64, height: 64)
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(AppTheme.colors.accent)
                     }
+                    Text("SilentStore")
+                        .font(AppTheme.fonts.title)
+                        .foregroundStyle(AppTheme.colors.primaryText)
+                    Button("Unlock") {
+                        Task { await unlockIfNeeded() }
+                    }
+                    .buttonStyle(AppTheme.buttons.primary)
                 }
             }
-            Text("Select an item")
+        }
+        .tint(AppTheme.colors.accent)
+        .sheet(isPresented: $showPermissions) {
+            PermissionsView(permissionsManager: permissionsManager)
+        }
+        .onAppear {
+            showPermissions = permissionsManager.shouldShowPermissionsSheet
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase != .active {
+                authManager.lock()
+                KeyManager.shared.clearMasterKeyFromMemory()
+            } else {
+                if didOnboard {
+                    Task { await unlockIfNeeded() }
+                }
+            }
+        }
+        .onChange(of: didOnboard) { _, newValue in
+            if newValue && scenePhase == .active {
+                Task { await unlockIfNeeded() }
+            }
         }
     }
 
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
-        }
+    private var shouldHideContent: Bool {
+        scenePhase != .active || !authManager.isAuthenticated
     }
 
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            offsets.map { items[$0] }.forEach(viewContext.delete)
-
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
-        }
+    private func unlockIfNeeded() async {
+        guard !isUnlocking else { return }
+        isUnlocking = true
+        defer { isUnlocking = false }
+        let success = await authManager.authenticateIfNeeded(useBiometrics: faceIdEnabled)
+        guard success else { return }
+        await vaultStore.prepareIfNeeded()
     }
 }
 
-private let itemFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .short
-    formatter.timeStyle = .medium
-    return formatter
-}()
-
 #Preview {
-    ContentView().environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
+    ContentView(context: PersistenceController.preview.container.viewContext)
 }
