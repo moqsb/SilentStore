@@ -55,8 +55,25 @@ struct VaultHomeView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            filesBodyContent(geometry: geometry)
-                .gesture(edgeSwipeGesture(geometry: geometry))
+            ZStack {
+                filesBodyContent(geometry: geometry)
+                if !pathStack.isEmpty {
+                    HStack {
+                        Color.clear
+                            .frame(width: 20)
+                            .contentShape(Rectangle())
+                            .gesture(edgeSwipeGesture(geometry: geometry))
+                        Spacer(minLength: 0)
+                        if layoutDirection == .rightToLeft {
+                            Color.clear
+                                .frame(width: 20)
+                                .contentShape(Rectangle())
+                                .gesture(edgeSwipeGesture(geometry: geometry))
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle(pathStack.isEmpty ? NSLocalizedString("Files", comment: "") : pathStack.last ?? "")
         .navigationBarTitleDisplayMode(.large)

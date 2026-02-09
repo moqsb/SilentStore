@@ -127,35 +127,23 @@ struct FileViewer: View {
                 if mediaItems.isEmpty {
                     ProgressView()
                         .tint(.white)
-                } else {
-                    TabView(selection: $selectedMediaID) {
-                        ForEach(mediaItems) { media in
-                            MediaItemView(
-                                item: media,
-                                geometry: geometry,
-                                onPlayerReady: { player in
-                                    if media.id == selectedMediaID {
-                                        currentPlayer = player
-                                        if let player {
-                                            isPlaying = player.timeControlStatus == .playing
-                                        }
-                                    }
-                                },
-                                isPlaying: $isPlaying,
-                                showChrome: $showChrome
-                            )
-                            .tag(media.id as UUID?)
-                        }
-                    }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
-                    .disabled(true)
-                    
-                    // Navigation buttons
+                } else if let current = mediaItems.first(where: { $0.id == selectedMediaID }) {
+                    MediaItemView(
+                        item: current,
+                        geometry: geometry,
+                        onPlayerReady: { player in
+                            currentPlayer = player
+                            if let player {
+                                isPlaying = player.timeControlStatus == .playing
+                            }
+                        },
+                        isPlaying: $isPlaying,
+                        showChrome: $showChrome
+                    )
+                    .id(current.id)
                     if mediaItems.count > 1 {
                         HStack {
-                            Button {
-                                navigatePrevious()
-                            } label: {
+                            Button { navigatePrevious() } label: {
                                 Image(systemName: "chevron.left")
                                     .font(.system(size: 24, weight: .semibold))
                                     .foregroundStyle(.white)
@@ -164,12 +152,8 @@ struct FileViewer: View {
                             }
                             .buttonStyle(.plain)
                             .padding(.leading, 20)
-                            
                             Spacer()
-                            
-                            Button {
-                                navigateNext()
-                            } label: {
+                            Button { navigateNext() } label: {
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 24, weight: .semibold))
                                     .foregroundStyle(.white)
@@ -733,6 +717,8 @@ private struct MediaItemView: View {
                     .ignoresSafeArea(.container, edges: .all)
             } else if item.isVideo, let player = player {
                 AVPlayerViewControllerRepresentable(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
                     .ignoresSafeArea(.container, edges: .all)
             } else {
                 VStack(spacing: 12) {
@@ -824,11 +810,14 @@ private struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentabl
         let controller = AVPlayerViewController()
         controller.player = player
         controller.showsPlaybackControls = false
+        controller.view.backgroundColor = .black
         return controller
     }
     
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        uiViewController.player = player
+        if uiViewController.player !== player {
+            uiViewController.player = player
+        }
     }
 }
 

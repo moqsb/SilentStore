@@ -255,3 +255,12 @@
 "Tap to enable biometric authentication" = "اضغط لتفعيل المصادقة البيومترية";
 "Enable Face ID / Touch ID to unlock your vault quickly and securely." = "فعّل Face ID / Touch ID لفتح مخزنك بسرعة وأمان.";
 "Face ID" = "Face ID";
+"Important" = "مهم";
+"Your passcode cannot be recovered if you forget it. There is no way to reset or retrieve it. Make sure you remember it." = "لا يمكن استرداد الرمز السري أبداً في حال نسيانه. لا يوجد أي طريقة لإعادة تعيينه أو استرجاعه. تأكد من حفظه جيداً.";
+"Continue" = "متابعة";
+"Passcode changed" = "تم تغيير الرمز السري";
+"Save it well. You cannot recover it if you forget it." = "احفظه جيداً. لا يمكنك استرداده إن نسيته.";
+"Everything will be lost forever. All your files, passcode, and vault data will be permanently deleted. This cannot be undone." = "كل شيء سُيفقد للأبد. جميع ملفاتك والرمز السري وبيانات المخزن ستُحذف نهائياً. لا يمكن التراجع عن ذلك.";
+"There is no way to recover anything after erasing." = "لا توجد أي طريقة لاسترداد أي شيء بعد المسح.";
+"You can confirm in %d seconds" = "يمكنك التأكيد خلال %d ثانية";
+"Erase everything" = "مسح كل شيء";

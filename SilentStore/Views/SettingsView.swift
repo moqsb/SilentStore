@@ -43,10 +43,6 @@ struct SettingsView: View {
                             settingsNavRow(icon: "lock.shield.fill", title: NSLocalizedString("Security", comment: "")) {
                                 SecuritySettingsView(vaultStore: vaultStore, hasPasscode: $hasPasscode, passcodeMode: $passcodeMode, showWipeConfirm: $showWipeConfirm)
                             }
-                            settingsDivider()
-                            settingsActionRow(icon: "checkmark.shield.fill", title: NSLocalizedString("Two-Step Verification", comment: "")) {
-                                passcodeMode = hasPasscode ? .change : .set
-                            }
                         }
                         
                         settingsSection(NSLocalizedString("Appearance", comment: "")) {
@@ -91,7 +87,7 @@ struct SettingsView: View {
             .navigationTitle(NSLocalizedString("Settings", comment: ""))
             .navigationBarTitleDisplayMode(.large)
         }
-        .sheet(item: $passcodeMode) { mode in
+        .fullScreenCover(item: $passcodeMode) { mode in
             PasscodeSheet(mode: mode) {
                 hasPasscode = KeyManager.shared.hasPasscode()
             }
@@ -99,15 +95,16 @@ struct SettingsView: View {
         .sheet(isPresented: $showTutorial) {
             TutorialView(isPresented: $showTutorial)
         }
-        .alert(NSLocalizedString("Erase all data?", comment: ""), isPresented: $showWipeConfirm) {
-            Button(NSLocalizedString("Erase", comment: ""), role: .destructive) {
-                vaultStore.wipeAllData()
-                didOnboard = false
-                hasPasscode = KeyManager.shared.hasPasscode()
-            }
-            Button(NSLocalizedString("Cancel", comment: ""), role: .cancel) {}
-        } message: {
-            Text(NSLocalizedString("This will delete all vault files and the app passcode. You will need to set a new passcode.", comment: ""))
+        .fullScreenCover(isPresented: $showWipeConfirm) {
+            WipeDataConfirmView(
+                isPresented: $showWipeConfirm,
+                onConfirm: {
+                    vaultStore.wipeAllData()
+                    didOnboard = false
+                    hasPasscode = KeyManager.shared.hasPasscode()
+                    showWipeConfirm = false
+                }
+            )
         }
         .onAppear {
             hasPasscode = KeyManager.shared.hasPasscode()
@@ -475,13 +472,15 @@ private struct AboutView: View {
     }
 }
 
-// MARK: - Passcode Sheet (kept from original)
+// MARK: - Passcode Sheet (full screen)
 
 private struct PasscodeSheet: View {
     enum Step {
+        case warning
         case current
         case new
         case confirm
+        case showPasscode
     }
     
     let mode: SettingsView.PasscodeSheetMode
@@ -497,78 +496,158 @@ private struct PasscodeSheet: View {
     init(mode: SettingsView.PasscodeSheetMode, onSaved: @escaping () -> Void) {
         self.mode = mode
         self.onSaved = onSaved
-        _step = State(initialValue: mode == .set ? .new : .current)
+        _step = State(initialValue: .warning)
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 24) {
-                Text(stepTitle)
-                    .font(AppTheme.fonts.title)
-                Text(stepSubtitle)
-                    .font(AppTheme.fonts.caption)
-                    .foregroundStyle(AppTheme.colors.secondaryText)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                
-                if step == .current {
-                    PasscodeEntryView(passcode: $currentPasscode, length: 6) {
-                        if currentPasscode.count == 6 {
-                            step = .new
+        ZStack {
+            AppTheme.gradients.background.ignoresSafeArea()
+            VStack(spacing: 0) {
+                if step != .showPasscode {
+                    HStack {
+                        Spacer()
+                        if step != .warning {
+                            Button(NSLocalizedString("Cancel", comment: "")) {
+                                HapticFeedback.play(.light)
+                                dismiss()
+                            }
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(AppTheme.colors.accent)
+                            .padding(.trailing, 20)
+                            .padding(.top, 16)
                         }
                     }
-                } else if step == .new {
-                    PasscodeEntryView(passcode: $newPasscode, length: 6) {
-                        if newPasscode.count == 6 {
-                            step = .confirm
+                    .frame(height: 44)
+                }
+                
+                ScrollView {
+                    VStack(spacing: 28) {
+                        if step == .warning {
+                            warningStepContent
+                        } else if step == .current {
+                            entryStepContent(title: NSLocalizedString("Current Passcode", comment: ""), subtitle: NSLocalizedString("Enter your current passcode", comment: "")) {
+                                PasscodeEntryView(passcode: $currentPasscode, length: 6) {
+                                    if currentPasscode.count == 6 { step = .new }
+                                }
+                            }
+                        } else if step == .new {
+                            entryStepContent(title: NSLocalizedString("New Passcode", comment: ""), subtitle: NSLocalizedString("Enter a new 6-digit passcode", comment: "")) {
+                                PasscodeEntryView(passcode: $newPasscode, length: 6) {
+                                    if newPasscode.count == 6 { step = .confirm }
+                                }
+                            }
+                        } else if step == .confirm {
+                            entryStepContent(title: NSLocalizedString("Confirm Passcode", comment: ""), subtitle: NSLocalizedString("Confirm your new passcode", comment: "")) {
+                                PasscodeEntryView(passcode: $confirmPasscode, length: 6) {
+                                    Task { await save() }
+                                }
+                            }
+                        } else if step == .showPasscode {
+                            showPasscodeStepContent
+                        }
+                        
+                        if let statusMessage, step != .warning, step != .showPasscode {
+                            Text(statusMessage)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(statusMessage.contains("Failed") || statusMessage.contains("don't") || statusMessage.contains("incorrect") ? AppTheme.colors.error : AppTheme.colors.secondaryText)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 24)
                         }
                     }
-                } else {
-                    PasscodeEntryView(passcode: $confirmPasscode, length: 6) {
-                        Task { await save() }
-                    }
-                }
-                
-                if let statusMessage {
-                    Text(statusMessage)
-                        .font(AppTheme.fonts.caption)
-                        .foregroundStyle(statusMessage.contains("Failed") || statusMessage.contains("don't") || statusMessage.contains("incorrect") ? .red : AppTheme.colors.secondaryText)
-                        .padding(.top, 8)
-                }
-                
-                Spacer()
-            }
-            .padding(.top, 40)
-            .navigationTitle(mode == .set ? NSLocalizedString("Set Passcode", comment: "") : NSLocalizedString("Change Passcode", comment: ""))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(NSLocalizedString("Done", comment: "")) { dismiss() }
+                    .padding(.top, 20)
+                    .padding(.bottom, 40)
                 }
             }
         }
     }
     
-    private var stepTitle: String {
-        switch step {
-        case .current:
-            return NSLocalizedString("Current Passcode", comment: "")
-        case .new:
-            return NSLocalizedString("New Passcode", comment: "")
-        case .confirm:
-            return NSLocalizedString("Confirm Passcode", comment: "")
+    private var warningStepContent: some View {
+        VStack(spacing: 32) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 56))
+                .foregroundStyle(AppTheme.colors.warning)
+            Text(NSLocalizedString("Important", comment: ""))
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(AppTheme.colors.primaryText)
+            Text(NSLocalizedString("Your passcode cannot be recovered if you forget it. There is no way to reset or retrieve it. Make sure you remember it.", comment: ""))
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(AppTheme.colors.secondaryText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+            Button {
+                HapticFeedback.play(.light)
+                step = mode == .set ? .new : .current
+            } label: {
+                Text(NSLocalizedString("Continue", comment: ""))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(AppTheme.gradients.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 12)
         }
+        .padding(.top, 40)
     }
     
-    private var stepSubtitle: String {
-        switch step {
-        case .current:
-            return NSLocalizedString("Enter your current passcode", comment: "")
-        case .new:
-            return NSLocalizedString("Enter a new 6-digit passcode", comment: "")
-        case .confirm:
-            return NSLocalizedString("Confirm your new passcode", comment: "")
+    private func entryStepContent<Content: View>(title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 24) {
+            Text(title)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(AppTheme.colors.primaryText)
+            Text(subtitle)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(AppTheme.colors.secondaryText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            content()
         }
+        .padding(.top, 24)
+    }
+    
+    private var showPasscodeStepContent: some View {
+        VStack(spacing: 28) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 56))
+                .foregroundStyle(AppTheme.colors.success)
+            Text(NSLocalizedString("Passcode changed", comment: ""))
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(AppTheme.colors.primaryText)
+            Text(NSLocalizedString("Save it well. You cannot recover it if you forget it.", comment: ""))
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(AppTheme.colors.secondaryText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+            Text(newPasscode)
+                .font(.system(size: 32, weight: .bold, design: .monospaced))
+                .foregroundStyle(AppTheme.colors.primaryText)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+                .background(AppTheme.colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(AppTheme.colors.cardBorder, lineWidth: 1)
+                )
+            Button {
+                HapticFeedback.play(.success)
+                onSaved()
+                dismiss()
+            } label: {
+                Text(NSLocalizedString("Done", comment: ""))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(AppTheme.gradients.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 8)
+        }
+        .padding(.top, 50)
     }
 
     private func save() async {
@@ -598,10 +677,8 @@ private struct PasscodeSheet: View {
                 try await KeyManager.shared.changePasscode(current: currentPasscode, new: newPasscode)
             }
             HapticFeedback.play(.success)
-            statusMessage = NSLocalizedString("Passcode saved.", comment: "")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                onSaved()
-                dismiss()
+            await MainActor.run {
+                step = .showPasscode
             }
         } catch {
             HapticFeedback.play(.error)
@@ -618,5 +695,83 @@ private struct PasscodeSheet: View {
             }
         }
         isSaving = false
+    }
+}
+
+// MARK: - Wipe Data Full-Screen Confirm (10 second countdown)
+
+private struct WipeDataConfirmView: View {
+    @Binding var isPresented: Bool
+    let onConfirm: () -> Void
+    @State private var countdown = 10
+    @State private var countdownTask: Task<Void, Never>?
+    
+    var body: some View {
+        ZStack {
+            Color(red: 0.06, green: 0.02, blue: 0.02)
+                .ignoresSafeArea()
+            VStack(spacing: 32) {
+                Image(systemName: "trash.fill")
+                    .font(.system(size: 64))
+                    .foregroundStyle(AppTheme.colors.error)
+                Text(NSLocalizedString("Erase all data?", comment: ""))
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(.white)
+                Text(NSLocalizedString("Everything will be lost forever. All your files, passcode, and vault data will be permanently deleted. This cannot be undone.", comment: ""))
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+                Text(NSLocalizedString("There is no way to recover anything after erasing.", comment: ""))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(AppTheme.colors.error)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+                if countdown > 0 {
+                    Text(String(format: NSLocalizedString("You can confirm in %d seconds", comment: ""), countdown))
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(.top, 8)
+                }
+                Spacer().frame(height: 20)
+                Button {
+                    onConfirm()
+                } label: {
+                    Text(NSLocalizedString("Erase everything", comment: ""))
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 18)
+                        .background(countdown > 0 ? Color.gray : AppTheme.colors.error)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .disabled(countdown > 0)
+                .padding(.horizontal, 28)
+                Button {
+                    timer?.invalidate()
+                    timer = nil
+                    isPresented = false
+                } label: {
+                    Text(NSLocalizedString("Cancel", comment: ""))
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+                .padding(.top, 12)
+            }
+            .padding(.top, 60)
+        }
+        .onAppear {
+            countdown = 10
+            countdownTask = Task { @MainActor in
+                for _ in 0..<10 {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    if Task.isCancelled { break }
+                    if countdown > 0 { countdown -= 1 }
+                }
+            }
+        }
+        .onDisappear {
+            countdownTask?.cancel()
+        }
     }
 }

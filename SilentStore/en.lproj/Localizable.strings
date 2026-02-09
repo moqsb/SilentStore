@@ -255,3 +255,12 @@
 "Tap to enable biometric authentication" = "Tap to enable biometric authentication";
 "Enable Face ID / Touch ID to unlock your vault quickly and securely." = "Enable Face ID / Touch ID to unlock your vault quickly and securely.";
 "Face ID" = "Face ID";
+"Important" = "Important";
+"Your passcode cannot be recovered if you forget it. There is no way to reset or retrieve it. Make sure you remember it." = "Your passcode cannot be recovered if you forget it. There is no way to reset or retrieve it. Make sure you remember it.";
+"Continue" = "Continue";
+"Passcode changed" = "Passcode changed";
+"Save it well. You cannot recover it if you forget it." = "Save it well. You cannot recover it if you forget it.";
+"Everything will be lost forever. All your files, passcode, and vault data will be permanently deleted. This cannot be undone." = "Everything will be lost forever. All your files, passcode, and vault data will be permanently deleted. This cannot be undone.";
+"There is no way to recover anything after erasing." = "There is no way to recover anything after erasing.";
+"You can confirm in %d seconds" = "You can confirm in %d seconds";
+"Erase everything" = "Erase everything";
