@@ -109,6 +109,7 @@ struct RecentsView: View {
             ForEach(filteredItems) { item in
                 NavigationLink {
                     FileViewer(item: item)
+                        .environmentObject(vaultStore)
                 } label: {
                     RecentCard(item: item)
                 }
@@ -269,6 +270,7 @@ private struct AISuggestionCard: View {
                     ForEach(getSuggestionItems().prefix(5)) { item in
                         NavigationLink {
                             FileViewer(item: item)
+                                .environmentObject(vaultStore)
                         } label: {
                             HStack(spacing: 10) {
                                 VaultThumbnailView(item: item, size: 32)

@@ -163,6 +163,19 @@ final class VaultStore: ObservableObject {
         }
     }
 
+    func uniqueItemName(base: String, inFolder folder: String?) -> String {
+        let existingNames = Set(items.filter { $0.folder == folder }.map(\.originalName))
+        if !existingNames.contains(base) { return base }
+        let ext = (base as NSString).pathExtension
+        let nameWithoutExt = ext.isEmpty ? base : (base as NSString).deletingPathExtension
+        var n = 1
+        while true {
+            let candidate = ext.isEmpty ? "\(nameWithoutExt) (\(n))" : "\(nameWithoutExt) (\(n)).\(ext)"
+            if !existingNames.contains(candidate) { return candidate }
+            n += 1
+        }
+    }
+
     func folderExists(path: String) -> Bool {
         storedFolderPaths().contains(path)
     }

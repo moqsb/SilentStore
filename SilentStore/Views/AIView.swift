@@ -73,17 +73,17 @@ struct AIView: View {
                         icon: "star.fill",
                         title: NSLocalizedString("Most Opened Files", comment: ""),
                         description: String(format: NSLocalizedString("%d files you open frequently", comment: ""), insights.mostOpenedFiles.count),
-                        items: insights.mostOpenedFiles
+                        items: insights.mostOpenedFiles,
+                        vaultStore: vaultStore
                     )
                 }
-                
-                // Recent Activity
                 if let recentFile = insights.lastOpenedFile {
                     InsightCard(
                         icon: "clock.fill",
                         title: NSLocalizedString("Last Opened", comment: ""),
                         description: recentFile.originalName,
-                        items: [recentFile]
+                        items: [recentFile],
+                        vaultStore: vaultStore
                     )
                 }
                 
@@ -421,7 +421,8 @@ private struct InsightCard: View {
     let title: String
     let description: String
     let items: [VaultItem]
-    
+    @ObservedObject var vaultStore: VaultStore
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -451,6 +452,7 @@ private struct InsightCard: View {
                     ForEach(items.prefix(5)) { item in
                         NavigationLink {
                             FileViewer(item: item)
+                                .environmentObject(vaultStore)
                         } label: {
                             VaultThumbnailView(item: item, size: 60)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
