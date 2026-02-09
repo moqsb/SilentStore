@@ -146,6 +146,8 @@ struct ContentView: View {
         defer { isUnlocking = false }
         let success = await authManager.authenticateIfNeeded(useBiometrics: faceIdEnabled)
         guard success else { return }
+        // Small delay to ensure context is properly set in KeyManager
+        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
         await vaultStore.prepareIfNeeded()
     }
     
@@ -159,6 +161,8 @@ struct ContentView: View {
         let success = await authManager.authenticate(useBiometrics: true)
         if success {
             HapticFeedback.play(.success)
+            // Small delay to ensure context is properly set
+            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
             await vaultStore.prepareIfNeeded()
         } else {
             HapticFeedback.play(.warning)

@@ -48,17 +48,35 @@ enum SecureEnclaveHelper {
         return encrypted
     }
 
-    static func unwrap(_ data: Data, with privateKey: SecKey) throws -> Data {
+    static func unwrap(_ data: Data, with privateKey: SecKey, context: LAContext? = nil) throws -> Data {
         var error: Unmanaged<CFError>?
-        guard let decrypted = SecKeyCreateDecryptedData(
+        
+        // For Secure Enclave keys with userPresence, we need authentication context
+        // The context must have been used for authentication already
+        if let context = context {
+            // Set the context as invalidated to force re-authentication if needed
+            // But first check if it's still valid
+            var authError: NSError?
+            if !context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &authError) {
+                // Context is invalid, need fresh authentication
+                throw SecureEnclaveError.unwrapFailed
+            }
+        }
+        
+        // Try standard decryption first
+        if let decrypted = SecKeyCreateDecryptedData(
             privateKey,
             .eciesEncryptionCofactorX963SHA256AESGCM,
             data as CFData,
             &error
-        ) as Data? else {
-            throw error?.takeRetainedValue() ?? SecureEnclaveError.unwrapFailed
+        ) as Data? {
+            return decrypted
         }
-        return decrypted
+        
+        // If that failed and we have a context, the issue is that Secure Enclave
+        // requires the context to be passed during key loading, not during decryption
+        // The key should have been loaded with the context already
+        throw error?.takeRetainedValue() ?? SecureEnclaveError.unwrapFailed
     }
 
     private static func loadPrivateKey(context: LAContext?) throws -> SecKey? {

@@ -21,11 +21,23 @@ final class KeyManager {
     func getOrCreateMasterKey() async throws -> SymmetricKey {
         if let cachedMasterKey { return cachedMasterKey }
         if let wrapped = try KeychainHelper.read(service: wrappedKeyService, account: wrappedKeyAccount) {
-            let privateKey = try SecureEnclaveHelper.loadOrCreateKeyPair(context: authContext)
-            let raw = try SecureEnclaveHelper.unwrap(wrapped, with: privateKey)
-            let key = SymmetricKey(data: raw)
-            cachedMasterKey = key
-            return key
+            // Try to load key with current auth context
+            do {
+                let privateKey = try SecureEnclaveHelper.loadOrCreateKeyPair(context: authContext)
+                let raw = try SecureEnclaveHelper.unwrap(wrapped, with: privateKey, context: authContext)
+                let key = SymmetricKey(data: raw)
+                cachedMasterKey = key
+                return key
+            } catch {
+                // If unwrap failed, it might be because auth context is invalid
+                // Try to reload the key - this will trigger authentication if needed
+                // But we need a valid context first
+                if authContext == nil {
+                    throw KeyManagerError.missingPasscodeData
+                }
+                // Re-throw the error - caller should handle authentication
+                throw error
+            }
         }
         let key = SymmetricKey(size: .bits256)
         let privateKey = try SecureEnclaveHelper.loadOrCreateKeyPair(context: authContext)
@@ -118,6 +130,8 @@ final class KeyManager {
         let passcodeKey = derivePasscodeKey(passcode, salt: salt)
         let raw = try Crypto.decrypt(wrapped, using: passcodeKey)
         cachedMasterKey = SymmetricKey(data: raw)
+        // Clear auth context when using passcode - will need fresh auth for Secure Enclave
+        authContext = nil
         return true
     }
 

@@ -98,3 +98,5 @@ struct VaultThumbnailView: View {
         }.value
     }
 }
+
+//
