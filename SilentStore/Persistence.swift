@@ -1,15 +1,9 @@
-//
-//  Persistence.swift
-//  SilentStore
-//
-//  Created by Mohammed Alqassab on 08-02-2026.
-//
-
 import CoreData
 
 struct PersistenceController {
     static let shared = PersistenceController()
 
+    // Preview data for SwiftUI previews only.
     @MainActor
     static let preview: PersistenceController = {
         let result = PersistenceController(inMemory: true)
@@ -30,16 +24,15 @@ struct PersistenceController {
         do {
             try viewContext.save()
         } catch {
-            // Replace this implementation with code to handle the error appropriately.
-            // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
             let nsError = error as NSError
-            fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
+            fatalError("Preview data error \(nsError), \(nsError.userInfo)")
         }
         return result
     }()
 
     let container: NSPersistentContainer
 
+    // Creates the Core Data stack for the app.
     init(inMemory: Bool = false) {
         container = NSPersistentContainer(name: "SilentStore")
         if inMemory {
@@ -47,18 +40,7 @@ struct PersistenceController {
         }
         container.loadPersistentStores(completionHandler: { (storeDescription, error) in
             if let error = error as NSError? {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-
-                /*
-                 Typical reasons for an error here include:
-                 * The parent directory does not exist, cannot be created, or disallows writing.
-                 * The persistent store is not accessible, due to permissions or data protection when the device is locked.
-                 * The device is out of space.
-                 * The store could not be migrated to the current model version.
-                 Check the error message to determine what the actual problem was.
-                 */
-                fatalError("Unresolved error \(error), \(error.userInfo)")
+                fatalError("Persistent store error \(error), \(error.userInfo)")
             }
         })
         container.viewContext.automaticallyMergesChangesFromParent = true

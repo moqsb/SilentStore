@@ -8,28 +8,39 @@ struct AddMenuView: View {
 
     @ObservedObject var vaultStore: VaultStore
     @Binding var selectionMode: Bool
+    var currentFolderPath: String? = nil
     var style: Style = .icon
     @State private var showPhotoPicker = false
     @State private var showDocumentPicker = false
-    @State private var pendingDeletionAssetId: String?
+    @State private var pendingDeletionAssetIds: [String] = []
     @State private var showDeleteOriginalAlert = false
     @State private var showCreateFolder = false
     @State private var newFolderName = ""
     @State private var pendingImport: ImportResult?
+    @State private var pendingImports: [ImportResult] = []
+    @State private var isProcessingImport = false
     @State private var showReplaceAlert = false
     @State private var showFolderExistsAlert = false
+    @State private var duplicateImports: [PendingImportContext] = []
+    @State private var showBulkDuplicateAlert = false
     @AppStorage("aiEnabled") private var aiEnabled = false
 
     var body: some View {
         Menu {
-            Button("Import from Photos") {
+            Button {
                 showPhotoPicker = true
+            } label: {
+                Label("Import from Photos", systemImage: "photo.on.rectangle")
             }
-            Button("Import Document") {
+            Button {
                 showDocumentPicker = true
+            } label: {
+                Label("Import Document", systemImage: "doc.badge.plus")
             }
-            Button("New Folder") {
+            Button {
                 showCreateFolder = true
+            } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
             }
         } label: {
             switch style {
@@ -55,30 +66,31 @@ struct AddMenuView: View {
             }
         }
         .sheet(isPresented: $showPhotoPicker) {
-            PhotoPickerSheet { result in
-                Task { await handleImport(result) }
+            PhotoPickerSheet { results in
+                enqueueImports(results)
                 showPhotoPicker = false
             } onCancel: {
                 showPhotoPicker = false
             }
         }
         .sheet(isPresented: $showDocumentPicker) {
-            DocumentPickerSheet { result in
-                Task { await handleImport(result) }
+            DocumentPickerSheet { results in
+                enqueueImports(results)
                 showDocumentPicker = false
             } onCancel: {
                 showDocumentPicker = false
             }
         }
-        .alert("Delete original photo?", isPresented: $showDeleteOriginalAlert) {
+        .alert(deleteOriginalTitle, isPresented: $showDeleteOriginalAlert) {
             Button("Delete", role: .destructive) {
-                if let id = pendingDeletionAssetId {
+                let ids = pendingDeletionAssetIds
+                for id in ids {
                     vaultStore.deletePHAsset(localIdentifier: id) { _ in }
                 }
-                pendingDeletionAssetId = nil
+                pendingDeletionAssetIds.removeAll()
             }
             Button("Keep", role: .cancel) {
-                pendingDeletionAssetId = nil
+                pendingDeletionAssetIds.removeAll()
             }
         } message: {
             Text("You can remove the original photo from your library after importing it.")
@@ -88,10 +100,11 @@ struct AddMenuView: View {
             Button("Create") {
                 let trimmed = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
-                    if vaultStore.folderExists(path: trimmed) {
+                    let targetPath = makeFolderPath(trimmed)
+                    if vaultStore.folderExists(path: targetPath) {
                         showFolderExistsAlert = true
                     } else {
-                        vaultStore.createFolder(path: trimmed)
+                        vaultStore.createFolder(path: targetPath)
                     }
                 }
                 newFolderName = ""
@@ -113,10 +126,60 @@ struct AddMenuView: View {
             }
             Button("Cancel", role: .cancel) {
                 pendingImport = nil
+                finishCurrentImport()
             }
         } message: {
             Text("A file with the same name already exists in this folder. Replace it?")
         }
+        .alert(NSLocalizedString("Duplicates found", comment: ""), isPresented: $showBulkDuplicateAlert) {
+            Button("Replace All", role: .destructive) {
+                Task { await handleBulkDuplicates(mode: .replaceAll) }
+            }
+            Button("Keep Both") {
+                Task { await handleBulkDuplicates(mode: .keepBoth) }
+            }
+            Button("Skip All", role: .cancel) {
+                duplicateImports.removeAll()
+            }
+        } message: {
+            Text(String(format: NSLocalizedString("Duplicate files detected (%d).", comment: ""), duplicateImports.count))
+        }
+    }
+
+    private func enqueueImports(_ results: [ImportResult]) {
+        pendingImports.append(contentsOf: results)
+        if !isProcessingImport {
+            Task { await processNextImport() }
+        }
+    }
+
+    private func processNextImport() async {
+        guard !pendingImports.isEmpty else {
+            isProcessingImport = false
+            if !pendingDeletionAssetIds.isEmpty {
+                showDeleteOriginalAlert = true
+            }
+            if !duplicateImports.isEmpty {
+                showBulkDuplicateAlert = true
+            }
+            return
+        }
+        isProcessingImport = true
+        let result = pendingImports[0]
+        await handleImport(result)
+    }
+
+    private func finishCurrentImport() {
+        if !pendingImports.isEmpty {
+            pendingImports.removeFirst()
+        }
+        Task { await processNextImport() }
+    }
+
+    private var deleteOriginalTitle: String {
+        pendingDeletionAssetIds.count > 1
+            ? NSLocalizedString("Delete original photos?", comment: "")
+            : NSLocalizedString("Delete original photo?", comment: "")
     }
 
     private func handleImport(_ result: ImportResult) async {
@@ -124,10 +187,10 @@ struct AddMenuView: View {
         if aiEnabled, result.isImage {
             category = await CoreMLManager.shared.classifyImage(result.data)
         }
-        let folder = category
+        let folder = normalizedCurrentFolderPath ?? category
         if vaultStore.existingItem(named: result.originalName, inFolder: folder) != nil {
-            pendingImport = result
-            showReplaceAlert = true
+            duplicateImports.append(PendingImportContext(result: result, folder: folder, category: category))
+            finishCurrentImport()
             return
         }
         do {
@@ -140,20 +203,25 @@ struct AddMenuView: View {
                 folder: folder
             )
             if let assetId = result.assetIdentifier {
-                pendingDeletionAssetId = assetId
-                showDeleteOriginalAlert = true
+                pendingDeletionAssetIds.append(assetId)
             }
             selectionMode = false
         } catch {
             print("Import failed: \(error)")
         }
+        finishCurrentImport()
     }
 
     private func replacePendingImport() async {
         guard let pendingImport else { return }
-        let folder = aiEnabled && pendingImport.isImage
-            ? await CoreMLManager.shared.classifyImage(pendingImport.data)
-            : nil
+        let folder: String?
+        if let normalizedCurrentFolderPath {
+            folder = normalizedCurrentFolderPath
+        } else if aiEnabled && pendingImport.isImage {
+            folder = await CoreMLManager.shared.classifyImage(pendingImport.data)
+        } else {
+            folder = nil
+        }
         if let existing = vaultStore.existingItem(named: pendingImport.originalName, inFolder: folder) {
             try? vaultStore.deleteItems(ids: [existing.id])
         }
@@ -167,13 +235,105 @@ struct AddMenuView: View {
                 folder: folder
             )
             if let assetId = pendingImport.assetIdentifier {
-                pendingDeletionAssetId = assetId
-                showDeleteOriginalAlert = true
+                pendingDeletionAssetIds.append(assetId)
             }
             selectionMode = false
         } catch {
             print("Import failed: \(error)")
         }
         self.pendingImport = nil
+        finishCurrentImport()
     }
+
+    private func handleBulkDuplicates(mode: BulkDuplicateMode) async {
+        let contexts = duplicateImports
+        duplicateImports.removeAll()
+        var reservedNames: [String: Set<String>] = [:]
+
+        for context in contexts {
+            let folderKey = context.folder ?? ""
+            if reservedNames[folderKey] == nil {
+                reservedNames[folderKey] = Set(
+                    vaultStore.items
+                        .filter { $0.folder == context.folder }
+                        .map { $0.originalName }
+                )
+            }
+            var targetName = context.result.originalName
+            if mode != .skipAll {
+                if mode == .replaceAll {
+                    if let existing = vaultStore.existingItem(named: targetName, inFolder: context.folder) {
+                        try? vaultStore.deleteItems(ids: [existing.id])
+                        reservedNames[folderKey]?.remove(existing.originalName)
+                    }
+                }
+                if mode == .keepBoth || (reservedNames[folderKey]?.contains(targetName) ?? false) {
+                    targetName = uniqueName(base: targetName, used: &reservedNames[folderKey]!)
+                }
+            }
+
+            guard mode != .skipAll else { continue }
+            do {
+                try await vaultStore.addItem(
+                    data: context.result.data,
+                    originalName: targetName,
+                    mimeType: context.result.mimeType,
+                    isImage: context.result.isImage,
+                    category: context.category,
+                    folder: context.folder
+                )
+                if let assetId = context.result.assetIdentifier {
+                    pendingDeletionAssetIds.append(assetId)
+                }
+            } catch {
+                print("Bulk import failed: \(error)")
+            }
+        }
+
+        if !pendingDeletionAssetIds.isEmpty {
+            showDeleteOriginalAlert = true
+        }
+    }
+
+    private func uniqueName(base: String, used: inout Set<String>) -> String {
+        if !used.contains(base) {
+            used.insert(base)
+            return base
+        }
+        let ext = (base as NSString).pathExtension
+        let name = (base as NSString).deletingPathExtension
+        var counter = 1
+        while true {
+            let candidate = "\(name) (\(counter))" + (ext.isEmpty ? "" : ".\(ext)")
+            if !used.contains(candidate) {
+                used.insert(candidate)
+                return candidate
+            }
+            counter += 1
+        }
+    }
+
+    private func makeFolderPath(_ name: String) -> String {
+        guard let currentFolderPath = normalizedCurrentFolderPath else {
+            return name
+        }
+        return currentFolderPath + "/" + name
+    }
+
+    private var normalizedCurrentFolderPath: String? {
+        let trimmed = currentFolderPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private enum BulkDuplicateMode {
+    case replaceAll
+    case keepBoth
+    case skipAll
+}
+
+private struct PendingImportContext {
+    let result: ImportResult
+    let folder: String?
+    let category: String?
 }

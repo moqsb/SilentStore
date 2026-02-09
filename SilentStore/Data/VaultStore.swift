@@ -5,6 +5,7 @@ import Photos
 
 @MainActor
 final class VaultStore: ObservableObject {
+    // Primary data source and file vault access layer.
     enum SortOption: String, CaseIterable, Identifiable {
         case newest = "Newest"
         case oldest = "Oldest"
@@ -30,9 +31,12 @@ final class VaultStore: ObservableObject {
     private var isPrepared = false
     @Published private(set) var items: [VaultItem] = []
     @Published private(set) var pinnedIDs: Set<UUID> = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var isReady = false
 
     private let pinnedKey = "vaultPinnedIDs"
     private let folderKey = "vaultFolderPaths"
+    private let recentsKey = "vaultRecentOpened"
 
     init(context: NSManagedObjectContext) {
         self.context = context
@@ -41,22 +45,37 @@ final class VaultStore: ObservableObject {
 
     func prepareIfNeeded() async {
         guard !isPrepared else { return }
+        isLoading = true
+        isReady = false
+        defer { isLoading = false }
         do {
             _ = try await KeyManager.shared.getOrCreateMasterKey()
             try migrateLegacyIfNeeded()
             try loadItems()
             isPrepared = true
+            isReady = true
         } catch {
             print("VaultStore prepare failed: \(error)")
+            isPrepared = false
+            isReady = false
         }
     }
 
     func refresh() async {
+        isLoading = true
+        defer { isLoading = false }
         do {
             try loadItems()
+            isReady = true
         } catch {
             print("VaultStore refresh failed: \(error)")
+            isReady = false
         }
+    }
+
+    func markLocked() {
+        isPrepared = false
+        isReady = false
     }
 
     func filteredItems(filter: FilterOption, searchText: String, sort: SortOption) -> [VaultItem] {
@@ -99,12 +118,9 @@ final class VaultStore: ObservableObject {
         }
 
         if !pinnedIDs.isEmpty {
-            filtered.sort { lhs, rhs in
-                let leftPinned = pinnedIDs.contains(lhs.id)
-                let rightPinned = pinnedIDs.contains(rhs.id)
-                if leftPinned == rightPinned { return false }
-                return leftPinned && !rightPinned
-            }
+            let pinned = filtered.filter { pinnedIDs.contains($0.id) }
+            let unpinned = filtered.filter { !pinnedIDs.contains($0.id) }
+            filtered = pinned + unpinned
         }
 
         return filtered
@@ -199,9 +215,24 @@ final class VaultStore: ObservableObject {
     }
 
     func temporaryShareURL(forFolderPath path: String) async throws -> URL {
+        return try await temporaryShareURL(forFolderPath: path, name: lastPathComponent(path))
+    }
+
+    func temporaryShareURL(forFolderPath path: String, name: String) async throws -> URL {
         let matching = items.filter { ($0.folder ?? "").hasPrefix(path) }
-        let folderURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folderURL = tempRoot.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+
+        let allFolders = storedFolderPaths().filter { $0 == path || $0.hasPrefix(path + "/") }
+        for folderPath in allFolders {
+            let relative = folderPath == path ? "" : String(folderPath.dropFirst(path.count + 1))
+            let destinationDir = relative.isEmpty ? folderURL : folderURL.appendingPathComponent(relative, isDirectory: true)
+            if !FileManager.default.fileExists(atPath: destinationDir.path) {
+                try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
+            }
+        }
+
         for item in matching {
             let data = try await decryptItemData(item)
             let relative = item.folder?.replacingOccurrences(of: path, with: "").trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""
@@ -226,6 +257,25 @@ final class VaultStore: ObservableObject {
     func findExactDuplicates() -> [[VaultItem]] {
         let grouped = Dictionary(grouping: items, by: { $0.sha256 })
         return grouped.values.filter { $0.count > 1 }
+    }
+
+    func recordOpened(id: UUID) {
+        var map = recentMap()
+        map[id.uuidString] = Date().timeIntervalSince1970
+        UserDefaults.standard.set(map, forKey: recentsKey)
+        objectWillChange.send()
+    }
+
+    func recentOpenedItems(from source: [VaultItem]? = nil) -> [VaultItem] {
+        let all = source ?? items
+        let map = recentMap()
+        let filtered = all.compactMap { item -> (VaultItem, TimeInterval)? in
+            guard let ts = map[item.id.uuidString] else { return nil }
+            return (item, ts)
+        }
+        return filtered
+            .sorted { $0.1 > $1.1 }
+            .map { $0.0 }
     }
 
     func deletePHAsset(localIdentifier: String, completion: @escaping (Bool) -> Void) {
@@ -278,6 +328,17 @@ final class VaultStore: ObservableObject {
         buildFolderTree()
     }
 
+    func folderChildren(of path: String?) -> [FolderNode] {
+        let roots = folderNodes()
+        guard let path else { return roots }
+        return findNode(path: path, in: roots)?.children ?? []
+    }
+
+    func items(in path: String?) -> [VaultItem] {
+        guard let path else { return items.filter { $0.folder == nil || $0.folder?.isEmpty == true } }
+        return items.filter { $0.folder == path }
+    }
+
     func deleteFolder(path: String) {
         do {
             let fetch = NSFetchRequest<VaultEntity>(entityName: "VaultEntity")
@@ -326,7 +387,7 @@ final class VaultStore: ObservableObject {
         }
         try context.save()
 
-        var paths = storedFolderPaths()
+        let paths = storedFolderPaths()
         let updatedPaths = paths.map { path -> String in
             if path == sourcePath { return newPath }
             if path.hasPrefix(sourcePath + "/") {
@@ -336,6 +397,34 @@ final class VaultStore: ObservableObject {
         }
         UserDefaults.standard.set(Array(Set(updatedPaths)), forKey: folderKey)
         try loadItems()
+    }
+
+    func wipeAllData() {
+        let fetch = NSFetchRequest<VaultEntity>(entityName: "VaultEntity")
+        do {
+            let matches = try context.fetch(fetch)
+            for entity in matches {
+                if let fileName = entity.fileName {
+                    let url = try? encryptedFileURL(fileName: fileName)
+                    if let url = url { try? FileManager.default.removeItem(at: url) }
+                }
+                context.delete(entity)
+            }
+            try context.save()
+        } catch {
+            print("Wipe failed: \(error)")
+        }
+
+        let base = encryptedBaseURL()
+        try? FileManager.default.removeItem(at: base)
+
+        UserDefaults.standard.removeObject(forKey: folderKey)
+        UserDefaults.standard.removeObject(forKey: pinnedKey)
+        UserDefaults.standard.removeObject(forKey: "didMigrateLegacyMetadata")
+        pinnedIDs.removeAll()
+        items.removeAll()
+        KeyManager.shared.resetAllSecrets()
+        objectWillChange.send()
     }
 
     private func loadItems() throws {
@@ -439,8 +528,22 @@ final class VaultStore: ObservableObject {
         items.filter { $0.folder == path }
     }
 
+    private func findNode(path: String, in nodes: [FolderNode]) -> FolderNode? {
+        for node in nodes {
+            if node.path == path { return node }
+            if let found = findNode(path: path, in: node.children) {
+                return found
+            }
+        }
+        return nil
+    }
+
     private func storedFolderPaths() -> [String] {
         UserDefaults.standard.stringArray(forKey: folderKey) ?? []
+    }
+
+    private func recentMap() -> [String: TimeInterval] {
+        UserDefaults.standard.dictionary(forKey: recentsKey) as? [String: TimeInterval] ?? [:]
     }
 
     private func lastPathComponent(_ path: String) -> String {

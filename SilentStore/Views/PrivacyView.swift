@@ -3,7 +3,7 @@ import SwiftUI
 struct PrivacyView: View {
     private var policyText: String {
         if let url = Bundle.main.url(forResource: "PRIVACY", withExtension: "txt"),
-           let text = try? String(contentsOf: url) {
+           let text = try? String(contentsOf: url, encoding: .utf8) {
             return text
         }
         return "SilentStore keeps your files encrypted on-device. No data is uploaded or shared."

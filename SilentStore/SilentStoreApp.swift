@@ -1,10 +1,3 @@
-//
-//  SilentStoreApp.swift
-//  SilentStore
-//
-//  Created by Mohammed Alqassab on 08-02-2026.
-//
-
 import SwiftUI
 import CoreData
 
