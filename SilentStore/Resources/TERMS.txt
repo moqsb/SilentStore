@@ -1,0 +1,23 @@
+Terms of Use
+
+By using SilentStore you agree to the following:
+
+1. Use of the app
+SilentStore is a secure vault for storing photos, videos, and documents on your device. You are responsible for your use of the app and for keeping your passcode safe.
+
+2. Your data
+All files are encrypted on your device. We do not collect, store, or have access to your files or passcode. No data is sent to our servers.
+
+3. Security
+You must keep your passcode and recovery key safe. If you lose them, your data cannot be recovered. We are not responsible for loss of access due to forgotten passcodes.
+
+4. Acceptable use
+You may not use SilentStore for illegal purposes or to store content that violates laws or others' rights. You are solely responsible for the content you store.
+
+5. Changes
+We may update these terms. Continued use of the app after changes means you accept the updated terms.
+
+6. Contact
+For questions about these terms, use the support option in the app settings.
+
+Last updated: 2025

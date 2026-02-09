@@ -69,7 +69,11 @@ struct SettingsView: View {
                         }
                         
                         settingsSection(NSLocalizedString("Help", comment: "")) {
-                            settingsNavRow(icon: "doc.text.fill", title: NSLocalizedString("Terms & Privacy Policy", comment: "")) {
+                            settingsNavRow(icon: "doc.text.fill", title: NSLocalizedString("Terms of Use", comment: "")) {
+                                TermsOfUseView()
+                            }
+                            settingsDivider()
+                            settingsNavRow(icon: "hand.raised.fill", title: NSLocalizedString("Privacy Policy", comment: "")) {
                                 PrivacyView()
                             }
                         }
@@ -748,8 +752,8 @@ private struct WipeDataConfirmView: View {
                 .disabled(countdown > 0)
                 .padding(.horizontal, 28)
                 Button {
-                    timer?.invalidate()
-                    timer = nil
+                    countdownTask?.cancel()
+                    countdownTask = nil
                     isPresented = false
                 } label: {
                     Text(NSLocalizedString("Cancel", comment: ""))

@@ -1,22 +1,22 @@
 import SwiftUI
 
-struct PrivacyView: View {
-    private var policyText: String {
-        if let url = Bundle.main.url(forResource: "PRIVACY", withExtension: "txt"),
+struct TermsOfUseView: View {
+    private var termsText: String {
+        if let url = Bundle.main.url(forResource: "TERMS", withExtension: "txt"),
            let text = try? String(contentsOf: url, encoding: .utf8) {
             return text
         }
-        return "SilentStore keeps your files encrypted on-device. No data is uploaded or shared."
+        return NSLocalizedString("Terms of use apply. Use the app responsibly and keep your passcode safe.", comment: "")
     }
 
     var body: some View {
         ScrollView {
-            Text(policyText)
+            Text(termsText)
                 .font(AppTheme.fonts.body)
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle(NSLocalizedString("Privacy Policy", comment: ""))
+        .navigationTitle(NSLocalizedString("Terms of Use", comment: ""))
         .background(AppTheme.gradients.background.ignoresSafeArea())
     }
 }
