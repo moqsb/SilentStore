@@ -60,9 +60,20 @@ struct VaultHomeView: View {
         }
         .navigationTitle(pathStack.isEmpty ? NSLocalizedString("Files", comment: "") : pathStack.last ?? "")
         .navigationBarTitleDisplayMode(.large)
-        .navigationDestination(for: VaultItem.self) { item in
-            FileViewer(item: item)
-                .environmentObject(vaultStore)
+        .navigationDestination(for: UUID.self) { id in
+            Group {
+                if let item = vaultStore.items.first(where: { $0.id == id }) {
+                    FileViewer(item: item)
+                        .environmentObject(vaultStore)
+                } else {
+                    ContentUnavailableView(
+                        NSLocalizedString("File not found", comment: ""),
+                        systemImage: "doc.badge.questionmark",
+                        description: Text(NSLocalizedString("The file may have been moved or deleted.", comment: ""))
+                    )
+                }
+            }
+            .environmentObject(vaultStore)
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -511,7 +522,7 @@ struct VaultHomeView: View {
                                 if selectionMode {
                                     ItemCard4Column(item: item, isSelected: selectedItems.contains(item.id)) { toggleSelection(for: item.id) }
                                 } else {
-                                    NavigationLink(value: item) {
+                                    NavigationLink(value: item.id) {
                                         ItemCard4Column(
                                             item: item,
                                             isSelected: false,
@@ -649,7 +660,7 @@ struct VaultHomeView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 20) {
                         ForEach(recentItems.prefix(20)) { item in
-                            NavigationLink(value: item) {
+                            NavigationLink(value: item.id) {
                                 StoryCircle(item: item)
                             }
                             .buttonStyle(.plain)

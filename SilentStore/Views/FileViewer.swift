@@ -100,9 +100,8 @@ struct FileViewer: View {
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
         }
-        .task {
+        .task(id: item.id) {
             await loadData()
-            // Mark as opened permanently when viewed from Recents
             let key = "recentsOpened_\(item.id.uuidString)"
             UserDefaults.standard.set(true, forKey: key)
         }
@@ -441,11 +440,12 @@ struct FileViewer: View {
             vaultStore.recordOpened(id: item.id)
             
             if item.isImage || item.isVideo {
-                // Load media items
+                let itemFolder = item.folder ?? ""
                 await MainActor.run {
-                    mediaItems = vaultStore.items
-                        .filter { ($0.isImage || $0.isVideo) && $0.folder == item.folder }
+                    let sameFolder: [VaultItem] = vaultStore.items
+                        .filter { ($0.isImage || $0.isVideo) && ($0.folder ?? "") == itemFolder }
                         .sorted { $0.createdAt > $1.createdAt }
+                    mediaItems = sameFolder.isEmpty ? [item] : sameFolder
                     selectedMediaID = item.id
                 }
             } else {
@@ -797,14 +797,13 @@ private struct MediaItemView: View {
                     isLoading = false
                 }
             }
+        } catch is CancellationError {
+            return
         } catch {
-            print("Failed to decrypt media: \(error)")
             await MainActor.run {
                 data = nil
                 onPlayerReady(nil)
-                withAnimation(.easeIn(duration: 0.3)) {
-                    isLoading = false
-                }
+                isLoading = false
             }
         }
     }
