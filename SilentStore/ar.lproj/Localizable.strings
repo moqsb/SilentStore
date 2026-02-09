@@ -7,6 +7,59 @@
 "Done Selecting" = "إنهاء التحديد";
 "Delete" = "حذف";
 "Share" = "مشاركة";
+"Info" = "معلومات";
+"AI Suggestions" = "اقتراحات الذكاء الاصطناعي";
+"Important Files" = "ملفات مهمة";
+"Duplicate Files" = "ملفات مكررة";
+"Large Files" = "ملفات كبيرة";
+"Unorganized Files" = "ملفات غير منظمة";
+"Recent Important" = "مهمة حديثة";
+"Files you open frequently" = "ملفات تفتحها بشكل متكرر";
+"Files that appear multiple times" = "ملفات تظهر عدة مرات";
+"Files taking up significant space" = "ملفات تشغل مساحة كبيرة";
+"Files without category or folder" = "ملفات بدون فئة أو مجلد";
+"Recently added important files" = "ملفات مهمة تمت إضافتها مؤخراً";
+"Today" = "اليوم";
+"This Week" = "هذا الأسبوع";
+"This Month" = "هذا الشهر";
+"No items today" = "لا توجد عناصر اليوم";
+"No items this week" = "لا توجد عناصر هذا الأسبوع";
+"No items this month" = "لا توجد عناصر هذا الشهر";
+"No files were opened today." = "لم يتم فتح أي ملفات اليوم.";
+"No files were opened this week." = "لم يتم فتح أي ملفات هذا الأسبوع.";
+"No files were opened this month." = "لم يتم فتح أي ملفات هذا الشهر.";
+"AI Insights" = "رؤى الذكاء الاصطناعي";
+"files" = "ملفات";
+"free of" = "متاح من";
+"copies" = "نسخ";
+"Clean" = "تنظيف";
+"Your Vault Insights" = "رؤى مخزنك";
+"Most Opened Files" = "الملفات الأكثر فتحاً";
+"files you open frequently" = "ملفات تفتحها بشكل متكرر";
+"Last Opened" = "آخر ملف تم فتحه";
+"Cleanup Recommendations" = "توصيات التنظيف";
+"Chat with AI" = "التحدث مع الذكاء الاصطناعي";
+"Enable AI in Settings" = "فعّل الذكاء الاصطناعي في الإعدادات";
+"Turn on Local AI to chat and get insights" = "فعّل الذكاء الاصطناعي المحلي للدردشة والحصول على الرؤى";
+"Ask AI about your files..." = "اسأل الذكاء الاصطناعي عن ملفاتك...";
+"AI is thinking..." = "الذكاء الاصطناعي يفكر...";
+"Hello! I'm your AI assistant. I can help you:\n• Find your most opened files\n• Analyze your storage usage\n• Suggest cleanup opportunities\n• Answer questions about your files\n\nWhat would you like to know?" = "مرحباً! أنا مساعدك الذكي. يمكنني مساعدتك في:\n• العثور على ملفاتك الأكثر فتحاً\n• تحليل استخدام التخزين\n• اقتراح فرص التنظيف\n• الإجابة على أسئلتك حول ملفاتك\n\nماذا تريد أن تعرف؟";
+"AI is currently disabled. Enable it in Settings to chat and get insights about your files." = "الذكاء الاصطناعي معطّل حالياً. فعّله في الإعدادات للدردشة والحصول على رؤى حول ملفاتك.";
+"Your most opened files:\n" = "ملفاتك الأكثر فتحاً:\n";
+"times" = "مرات";
+"Your last opened file is: %@\nOpened %@" = "آخر ملف فتحته هو: %@\nتم فتحه %@";
+"Storage Analysis:\n• Total: %@\n" = "تحليل التخزين:\n• الإجمالي: %@\n";
+"%d duplicate groups found\n" = "تم العثور على %d مجموعة مكررة\n";
+"Large files (>50MB):\n" = "ملفات كبيرة (>50 ميجابايت):\n";
+"Your vault is well organized! 🎉" = "مخزنك منظم بشكل جيد! 🎉";
+"\nConsider cleaning duplicates and large files to save space." = "\nفكر في تنظيف الملفات المكررة والكبيرة لتوفير المساحة.";
+"Here are my suggestions:\n\n" = "إليك اقتراحاتي:\n\n";
+"I can help you with:\n• Finding your most opened files\n• Analyzing storage usage\n• Suggesting cleanup opportunities\n• Answering questions about your files\n\nTry asking: 'What are my most opened files?' or 'How can I save space?'" = "يمكنني مساعدتك في:\n• العثور على ملفاتك الأكثر فتحاً\n• تحليل استخدام التخزين\n• اقتراح فرص التنظيف\n• الإجابة على أسئلتك حول ملفاتك\n\nجرب السؤال: 'ما هي ملفاتي الأكثر فتحاً؟' أو 'كيف يمكنني توفير المساحة؟'";
+"%d Duplicate Groups" = "%d مجموعة مكررة";
+"%d Large Files" = "%d ملف كبير";
+"Save %@ by removing duplicates" = "وفر %@ بإزالة المكررات";
+"Total size: %@" = "الحجم الإجمالي: %@";
+"View" = "عرض";
 "Pin" = "تثبيت";
 "Unpin" = "إلغاء التثبيت";
 "No files yet" = "لا توجد ملفات بعد";
@@ -183,3 +236,22 @@
 "Enter a new 6-digit passcode" = "أدخل رمز مرور جديد مكون من 6 أرقام";
 "Confirm your new passcode" = "أكد رمز المرور الجديد";
 "Incorrect current passcode." = "رمز المرور الحالي غير صحيح.";
+"Secure Your Files" = "أمّن ملفاتك";
+"All files are encrypted locally with AES-256. Your data stays private and secure." = "جميع الملفات مشفرة محليًا باستخدام AES-256. بياناتك تبقى خاصة وآمنة.";
+"Organize with Folders" = "نظّم بالمجلدات";
+"Create folders, move files, and keep everything organized. Swipe left or right to navigate." = "أنشئ مجلدات، انقل الملفات، واحتفظ بكل شيء منظمًا. اسحب يمينًا أو يسارًا للتنقل.";
+"Import Files" = "استيراد الملفات";
+"Tap the + button to import photos, videos, or documents from your device." = "اضغط على زر + لاستيراد الصور أو الفيديوهات أو المستندات من جهازك.";
+"Swipe Actions" = "إجراءات السحب";
+"Swipe left to pin files, swipe right to share or delete. Long press for more options." = "اسحب يسارًا لتثبيت الملفات، اسحب يمينًا للمشاركة أو الحذف. اضغط مطولاً لمزيد من الخيارات.";
+"Close Media Viewer" = "إغلاق عارض الوسائط";
+"Swipe down on any media to close the viewer. Swipe left or right to browse between files." = "اسحب للأسفل على أي وسائط لإغلاق العارض. اسحب يمينًا أو يسارًا للتنقل بين الملفات.";
+"Previous" = "السابق";
+"Next" = "التالي";
+"Help" = "المساعدة";
+"Show Tutorial" = "عرض التعليمات";
+"Learn how to use SilentStore" = "تعلم كيفية استخدام SilentStore";
+"Permission denied. Tap to enable." = "تم رفض الصلاحية. اضغط لتفعيلها.";
+"Tap to enable biometric authentication" = "اضغط لتفعيل المصادقة البيومترية";
+"Enable Face ID / Touch ID to unlock your vault quickly and securely." = "فعّل Face ID / Touch ID لفتح مخزنك بسرعة وأمان.";
+"Face ID" = "Face ID";

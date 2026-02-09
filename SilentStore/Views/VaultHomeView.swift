@@ -3,14 +3,15 @@ import UniformTypeIdentifiers
 
 struct VaultHomeView: View {
     @ObservedObject var vaultStore: VaultStore
+    @Binding var initialFilter: VaultStore.FilterOption?
     @State private var filter: VaultStore.FilterOption = .all
     @State private var sort: VaultStore.SortOption = .newest
     @State private var searchText = ""
+    @FocusState private var isSearchFocused: Bool
     @State private var selectionMode = false
     @State private var selectedItems: Set<UUID> = []
-    @State private var showSettings = false
     @State private var shareItem: ShareItem?
-    @State private var lastSharedURL: URL?
+    @State private var lastSharedURLs: [URL] = []
     @State private var pathStack: [String] = []
     @State private var deleteTarget: DeleteTarget?
     @State private var saveFolderPath: String?
@@ -21,596 +22,1087 @@ struct VaultHomeView: View {
     @State private var showMoveFolderPicker = false
     @State private var showMoveItemPicker = false
     @State private var showBulkDeleteConfirm = false
+    @State private var selectedRecentsFilter: RecentsFilter = .all
+    @State private var aiSuggestions: [AISuggestion] = []
+    @State private var isLoadingSuggestions = false
+    @State private var showPhotoPicker = false
+    @State private var showDocumentPicker = false
+    @State private var showCreateFolder = false
+    @State private var newFolderName = ""
+    @State private var showFolderExistsAlert = false
+    @State private var pendingDeletionAssetIds: [String] = []
+    @State private var showDeleteOriginalAlert = false
+    @State private var pendingImport: ImportResult?
+    @State private var pendingImports: [ImportResult] = []
+    @State private var isProcessingImport = false
+    @State private var showReplaceAlert = false
+    @State private var duplicateImports: [PendingImportContext] = []
+    @State private var showBulkDuplicateAlert = false
+    @AppStorage("aiEnabled") private var aiEnabled = false
+    @Environment(\.layoutDirection) private var layoutDirection
+    
+    enum RecentsFilter: String, CaseIterable {
+        case all = "All"
+        case today = "Today"
+        case week = "This Week"
+        
+        var id: String { rawValue }
+    }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 12) {
-                if selectionMode {
-                    selectionBar
-                }
-                filterBar
-                breadcrumbBar
-                content
-            }
-            .navigationTitle("Files")
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
-            .background(AppTheme.gradients.background.ignoresSafeArea())
-            .toolbar {
-                if !selectionMode {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Menu {
-                            Picker("Sort", selection: $sort) {
-                                ForEach(VaultStore.SortOption.allCases) { option in
-                                    Text(option.rawValue).tag(option)
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
+        GeometryReader { geometry in
+            ZStack {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        searchSection
+                        if pathStack.isEmpty {
+                            foldersHorizontalSection
                         }
+                        if !pathStack.isEmpty {
+                            improvedBreadcrumbBar
+                        }
+                        mainContentGrid
                     }
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        AddMenuView(
-                            vaultStore: vaultStore,
-                            selectionMode: $selectionMode,
-                            currentFolderPath: pathStack.joined(separator: "/")
-                        )
-                    }
+                    .padding(.bottom, 100)
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        HapticFeedback.play(.selection)
-                        selectionMode.toggle()
-                        if !selectionMode {
-                            selectedItems.removeAll()
+                .background(AppTheme.gradients.background.ignoresSafeArea())
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Menu {
+                        Button {
+                            showPhotoPicker = true
+                        } label: {
+                            Label(NSLocalizedString("Import from Photos", comment: ""), systemImage: "photo.on.rectangle")
+                        }
+                        Button {
+                            showDocumentPicker = true
+                        } label: {
+                            Label(NSLocalizedString("Import Document", comment: ""), systemImage: "doc.badge.plus")
+                        }
+                        Button {
+                            showCreateFolder = true
+                        } label: {
+                            Label(NSLocalizedString("New Folder", comment: ""), systemImage: "folder.badge.plus")
                         }
                     } label: {
-                        Image(systemName: selectionMode ? "checkmark.circle.fill" : "checkmark.circle")
+                        ZStack {
+                            Circle()
+                                .fill(AppTheme.gradients.accent)
+                                .frame(width: 56, height: 56)
+                                .shadow(color: AppTheme.colors.accent.opacity(0.4), radius: 12, x: 0, y: 6)
+                            
+                            Image(systemName: "plus")
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
                     }
-                    .accessibilityLabel(Text(NSLocalizedString(selectionMode ? "Done" : "Select", comment: "")))
-                    .buttonStyle(InteractiveButtonStyle())
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 20)
                 }
+            }
+            .sheet(isPresented: $showPhotoPicker) {
+                PhotoPickerSheet { results in
+                    enqueueImports(results)
+                    showPhotoPicker = false
+                } onCancel: {
+                    showPhotoPicker = false
+                }
+            }
+            .sheet(isPresented: $showDocumentPicker) {
+                DocumentPickerSheet { results in
+                    enqueueImports(results)
+                    showDocumentPicker = false
+                } onCancel: {
+                    showDocumentPicker = false
+                }
+            }
+            
+            if selectionMode {
+                VStack {
+                    Spacer()
+                    selectionModeBar
+                }
+            }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 20)
+                    .onEnded { value in
+                        guard !pathStack.isEmpty else { return }
+                        
+                        let screenWidth = geometry.size.width
+                        let edgeThreshold: CGFloat = 20
+                        let swipeThreshold: CGFloat = 100
+                        if layoutDirection == .rightToLeft {
+                            let isFromEdge = value.startLocation.x >= screenWidth - edgeThreshold
+                            if isFromEdge && value.translation.width > swipeThreshold {
+                                HapticFeedback.play(.light)
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    _ = pathStack.popLast()
+                                }
+                            }
+                        } else {
+                            let isFromEdge = value.startLocation.x <= edgeThreshold
+                            if isFromEdge && value.translation.width > swipeThreshold {
+                                HapticFeedback.play(.light)
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    _ = pathStack.popLast()
+                                }
+                            }
+                        }
+                    }
+            )
+        }
+        .navigationTitle(pathStack.isEmpty ? NSLocalizedString("Files", comment: "") : pathStack.last ?? "")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
                 if selectionMode {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(role: .destructive) {
-                            HapticFeedback.play(.warning)
-                            showBulkDeleteConfirm = true
-                        } label: {
-                            Image(systemName: "trash")
+                    Button(NSLocalizedString("Cancel", comment: "")) {
+                        HapticFeedback.play(.light)
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            selectionMode = false
+                            selectedItems.removeAll()
                         }
-                        .buttonStyle(InteractiveButtonStyle(hapticStyle: .warning))
                     }
-                }
-            }
-            .sheet(item: $shareItem, onDismiss: {
-                if let url = lastSharedURL {
-                    try? FileManager.default.removeItem(at: url)
-                    lastSharedURL = nil
-                }
-            }) { item in
-                ShareSheet(items: [item.url])
-                    .presentationDetents([.medium])
-                    .presentationDragIndicator(.visible)
-            }
-            .alert(item: $deleteTarget) { target in
-                Alert(
-                    title: Text(target.title),
-                    message: Text(target.message),
-                    primaryButton: .destructive(Text("Delete")) {
-                        handleDeleteConfirmed(target)
-                    },
-                    secondaryButton: .cancel()
-                )
-            }
-            .alert(NSLocalizedString("Delete selected items?", comment: ""), isPresented: $showBulkDeleteConfirm) {
-                Button("Delete", role: .destructive) {
-                    deleteSelected()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(String(format: NSLocalizedString("You are about to delete %d item(s).", comment: ""), selectedItems.count))
-            }
-            .confirmationDialog(
-                NSLocalizedString("Move Folder", comment: ""),
-                isPresented: $showMoveFolderPicker,
-                titleVisibility: .visible
-            ) {
-                ForEach(availableFolderDestinations(for: moveFolderPath), id: \.path) { folder in
-                    Button(folder.name) {
-                        if let moveFolderPath {
-                            try? vaultStore.moveFolder(from: moveFolderPath, to: folder.path)
+                    .foregroundStyle(AppTheme.colors.accent)
+                } else {
+                    Button(NSLocalizedString("Select", comment: "")) {
+                        HapticFeedback.play(.light)
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            selectionMode = true
                         }
-                        self.moveFolderPath = nil
                     }
+                    .foregroundStyle(AppTheme.colors.accent)
                 }
-                Button(NSLocalizedString("Move to Root", comment: "")) {
+            }
+        }
+        .sheet(item: $shareItem, onDismiss: {
+            for url in lastSharedURLs {
+                try? FileManager.default.removeItem(at: url)
+            }
+            lastSharedURLs = []
+        }) { item in
+            ShareSheet(items: item.urls)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
+        .alert(item: $deleteTarget) { target in
+            Alert(
+                title: Text(target.title),
+                message: Text(target.message),
+                primaryButton: .destructive(Text("Delete")) {
+                    handleDeleteConfirmed(target)
+                },
+                secondaryButton: .cancel()
+            )
+        }
+        .alert(NSLocalizedString("Delete selected items?", comment: ""), isPresented: $showBulkDeleteConfirm) {
+            Button("Delete", role: .destructive) {
+                deleteSelected()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(String(format: NSLocalizedString("You are about to delete %d item(s).", comment: ""), selectedItems.count))
+        }
+        .confirmationDialog(
+            NSLocalizedString("Move Folder", comment: ""),
+            isPresented: $showMoveFolderPicker,
+            titleVisibility: .visible
+        ) {
+            ForEach(availableFolderDestinations(for: moveFolderPath), id: \.path) { folder in
+                Button(folder.name) {
                     if let moveFolderPath {
-                        try? vaultStore.moveFolder(from: moveFolderPath, to: nil)
+                        try? vaultStore.moveFolder(from: moveFolderPath, to: folder.path)
                     }
-                    self.moveFolderPath = nil
-                }
-                Button("Cancel", role: .cancel) {
                     self.moveFolderPath = nil
                 }
             }
-            .confirmationDialog(
-                NSLocalizedString("Move to Folder", comment: ""),
-                isPresented: $showMoveItemPicker,
-                titleVisibility: .visible
-            ) {
-                ForEach(vaultStore.folderNodes()) { folder in
-                    Button(folder.name) {
-                        try? vaultStore.assignFolder(forIDs: moveItemIDs, folderPath: folder.path)
-                        moveItemIDs.removeAll()
-                    }
+            Button(NSLocalizedString("Move to Root", comment: "")) {
+                if let moveFolderPath {
+                    try? vaultStore.moveFolder(from: moveFolderPath, to: nil)
                 }
-                Button("Cancel", role: .cancel) {
+                self.moveFolderPath = nil
+            }
+            Button("Cancel", role: .cancel) {
+                self.moveFolderPath = nil
+            }
+        }
+        .confirmationDialog(
+            NSLocalizedString("Move to Folder", comment: ""),
+            isPresented: $showMoveItemPicker,
+            titleVisibility: .visible
+        ) {
+            ForEach(vaultStore.folderNodes()) { folder in
+                Button(folder.name) {
+                    try? vaultStore.assignFolder(forIDs: moveItemIDs, folderPath: folder.path)
                     moveItemIDs.removeAll()
                 }
             }
-            .sheet(isPresented: $showSettings) {
-                SettingsView(vaultStore: vaultStore)
+            Button("Cancel", role: .cancel) {
+                moveItemIDs.removeAll()
             }
-            .alert("Save Folder", isPresented: $showSaveFolderPrompt) {
-                TextField("Folder name", text: $saveFolderName)
-                Button("Save") {
-                    Task { await saveFolderToFiles() }
+        }
+        .alert("Save Folder", isPresented: $showSaveFolderPrompt) {
+            TextField("Folder name", text: $saveFolderName)
+            Button("Save") {
+                Task { await saveFolderToFiles() }
+            }
+            Button("Cancel", role: .cancel) {
+                saveFolderPath = nil
+            }
+        } message: {
+            Text("Change the folder name before saving to Files.")
+        }
+        .alert(deleteOriginalTitle, isPresented: $showDeleteOriginalAlert) {
+            Button("Delete", role: .destructive) {
+                let ids = pendingDeletionAssetIds
+                for id in ids {
+                    vaultStore.deletePHAsset(localIdentifier: id) { _ in }
                 }
-                Button("Cancel", role: .cancel) {
-                    saveFolderPath = nil
+                pendingDeletionAssetIds.removeAll()
+            }
+            Button("Keep", role: .cancel) {
+                pendingDeletionAssetIds.removeAll()
+            }
+        } message: {
+            Text("You can remove the original photo from your library after importing it.")
+        }
+        .alert("New Folder", isPresented: $showCreateFolder) {
+            TextField("Folder name", text: $newFolderName)
+            Button("Create") {
+                let trimmed = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    let targetPath = makeFolderPath(trimmed)
+                    if vaultStore.folderExists(path: targetPath) {
+                        showFolderExistsAlert = true
+                    } else {
+                        vaultStore.createFolder(path: targetPath)
+                        // Refresh to show the new folder immediately
+                        Task {
+                            await vaultStore.refresh()
+                        }
+                    }
                 }
-            } message: {
-                Text("Change the folder name before saving to Files.")
+                newFolderName = ""
+            }
+            Button("Cancel", role: .cancel) {
+                newFolderName = ""
+            }
+        } message: {
+            Text("Create a new folder in your vault.")
+        }
+        .alert("Folder exists", isPresented: $showFolderExistsAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("A folder with the same name already exists.")
+        }
+        .alert("File exists", isPresented: $showReplaceAlert) {
+            Button("Replace", role: .destructive) {
+                Task { await replacePendingImport() }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingImport = nil
+                finishCurrentImport()
+            }
+        } message: {
+            Text("A file with the same name already exists in this folder. Replace it?")
+        }
+        .alert(NSLocalizedString("Duplicates found", comment: ""), isPresented: $showBulkDuplicateAlert) {
+            Button("Replace All", role: .destructive) {
+                Task { await handleBulkDuplicates(mode: .replaceAll) }
+            }
+            Button("Keep Both") {
+                Task { await handleBulkDuplicates(mode: .keepBoth) }
+            }
+            Button("Skip All", role: .cancel) {
+                duplicateImports.removeAll()
+            }
+        } message: {
+            Text(String(format: NSLocalizedString("Duplicate files detected (%d).", comment: ""), duplicateImports.count))
+        }
+        .onAppear {
+            if let f = initialFilter {
+                filter = f
+                initialFilter = nil
+            }
+        }
+        .onChange(of: initialFilter) { _, newValue in
+            if let f = newValue {
+                filter = f
+                initialFilter = nil
+            }
+        }
+        .task {
+            if aiEnabled && pathStack.isEmpty {
+                await loadAISuggestions()
+            }
+        }
+        .refreshable {
+            await vaultStore.refresh()
+            if aiEnabled && pathStack.isEmpty {
+                await loadAISuggestions()
             }
         }
     }
+    
+    // MARK: - AI Suggestions Section
+    
+    private var aiSuggestionsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(AppTheme.gradients.accent)
+                
+                Text(NSLocalizedString("AI Suggestions", comment: ""))
+                    .font(AppTheme.fonts.subtitle)
+                    .foregroundStyle(AppTheme.colors.primaryText)
+                
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(aiSuggestions.prefix(3)) { suggestion in
+                        AISuggestionCard(suggestion: suggestion, vaultStore: vaultStore)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+        .padding(.vertical, 8)
+    }
+    
+    // MARK: - Recents Stories Section (Snapchat Style)
+    
+    private var recentsStoriesSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Image(systemName: "clock.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(AppTheme.gradients.accent)
+                
+                Text(NSLocalizedString("Recents", comment: ""))
+                    .font(AppTheme.fonts.subtitle)
+                    .foregroundStyle(AppTheme.colors.primaryText)
+                
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            
+            // Recents Filter
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(RecentsFilter.allCases, id: \.id) { filter in
+                        FilterChip(
+                            title: NSLocalizedString(filter.rawValue, comment: ""),
+                            isSelected: selectedRecentsFilter == filter
+                        ) {
+                            HapticFeedback.play(.selection)
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                selectedRecentsFilter = filter
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            
+            // Stories Circles - Snapchat Style
+            let recentItems = getRecentItems()
+            if recentItems.isEmpty {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 8) {
+                        Image(systemName: "clock.badge.xmark")
+                            .font(.system(size: 32))
+                            .foregroundStyle(AppTheme.colors.secondaryText.opacity(0.5))
+                        Text(NSLocalizedString("No recent items", comment: ""))
+                            .font(AppTheme.fonts.caption)
+                            .foregroundStyle(AppTheme.colors.secondaryText)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 20)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 20) {
+                        ForEach(recentItems.prefix(20)) { item in
+                            NavigationLink {
+                                FileViewer(item: item)
+                            } label: {
+                                StoryCircle(item: item)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button {
+                                    Task { await prepareShare(for: item) }
+                                } label: {
+                                    Label(NSLocalizedString("Share", comment: ""), systemImage: "square.and.arrow.up")
+                                }
+                                
+                                Button {
+                                    vaultStore.togglePin(id: item.id)
+                                } label: {
+                                    Label(
+                                        vaultStore.pinnedIDs.contains(item.id) ? NSLocalizedString("Unpin", comment: "") : NSLocalizedString("Pin", comment: ""),
+                                        systemImage: vaultStore.pinnedIDs.contains(item.id) ? "pin.slash" : "pin"
+                                    )
+                                }
+                                
+                                Divider()
+                                
+                                Button(role: .destructive) {
+                                    deleteTarget = .file(item)
+                                } label: {
+                                    Label(NSLocalizedString("Delete", comment: ""), systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12) // Extra padding for full circle visibility
+                    .environment(\.layoutDirection, layoutDirection)
+                }
+            }
+        }
+        .padding(.vertical, 8) // Additional vertical padding for the section
+    }
+    
+    // MARK: - Search Section
+    
+    private var searchSection: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(AppTheme.colors.secondaryText)
+                
+                TextField(NSLocalizedString("Search files...", comment: ""), text: $searchText)
+                    .font(.system(size: 16))
+                    .focused($isSearchFocused)
+                    .onSubmit {
+                        isSearchFocused = false
+                    }
+                
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                        isSearchFocused = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(AppTheme.colors.secondaryText)
+                    }
+                }
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(AppTheme.colors.cardBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(AppTheme.colors.cardBorder, lineWidth: 1)
+                    )
+            )
+            
+            // Filter Bar
+            if !searchText.isEmpty {
+                customFilterBar
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 16)
+    }
+    
+    // MARK: - Folders Horizontal Section
+    
+    @ViewBuilder
+    private var foldersHorizontalSection: some View {
+        let folders = vaultStore.folderChildren(of: nil)
+        
+        if !folders.isEmpty {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(AppTheme.colors.accent)
+                    
+                    Text(NSLocalizedString("Folders", comment: ""))
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(AppTheme.colors.primaryText)
+                    
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 16) {
+                        ForEach(folders) { folder in
+                            FolderCardHorizontal(folder: folder) {
+                                HapticFeedback.play(.light)
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    pathStack.append(folder.name)
+                                }
+                            }
+                            .contextMenu {
+                                Button {
+                                    moveFolderPath = folder.path
+                                    showMoveFolderPicker = true
+                                } label: {
+                                    Label(NSLocalizedString("Move", comment: ""), systemImage: "folder")
+                                }
+                                
+                                Divider()
+                                
+                                Button(role: .destructive) {
+                                    deleteTarget = .folder(folder)
+                                } label: {
+                                    Label(NSLocalizedString("Delete", comment: ""), systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .environment(\.layoutDirection, layoutDirection)
+                }
+            }
+            .padding(.bottom, 24)
+        }
+    }
+    
+    // MARK: - Custom Filter Bar
+    
+    private var customFilterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                ForEach(VaultStore.FilterOption.allCases, id: \.id) { option in
+                    CustomFilterButton(
+                        title: NSLocalizedString(option.rawValue, comment: ""),
+                        icon: filterIcon(option),
+                        isSelected: filter == option
+                    ) {
+                        HapticFeedback.play(.selection)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            filter = option
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+    
+    private func filterIcon(_ option: VaultStore.FilterOption) -> String {
+        switch option {
+        case .all: return "square.grid.2x2"
+        case .images: return "photo"
+        case .videos: return "video"
+        case .documents: return "doc.text"
+        case .others: return "ellipsis.circle"
+        }
+    }
+    
+    // MARK: - Improved Breadcrumb Bar
+    
+    private var improvedBreadcrumbBar: some View {
+        HStack(spacing: 0) {
+            // Back button
+            Button {
+                HapticFeedback.play(.light)
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    _ = pathStack.popLast()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: layoutDirection == .rightToLeft ? "chevron.right" : "chevron.left")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(NSLocalizedString("Back", comment: ""))
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .foregroundStyle(AppTheme.colors.accent)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule()
+                        .fill(AppTheme.colors.accent.opacity(0.15))
+                )
+            }
+            .buttonStyle(.plain)
+            
+            Spacer()
+            
+            // Path segments - clickable
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    // Home button
+                    Button {
+                        HapticFeedback.play(.light)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            pathStack.removeAll()
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "house.fill")
+                                .font(.system(size: 12))
+                            Text("Home")
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                        .foregroundStyle(pathStack.isEmpty ? AppTheme.colors.accent : AppTheme.colors.secondaryText)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(pathStack.isEmpty ? AppTheme.colors.accent.opacity(0.15) : AppTheme.colors.cardBackground)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    
+                    // Path segments
+                    ForEach(Array(pathStack.enumerated()), id: \.offset) { index, segment in
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(AppTheme.colors.secondaryText.opacity(0.5))
+                        
+                        Button {
+                            HapticFeedback.play(.light)
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                pathStack = Array(pathStack.prefix(index + 1))
+                            }
+                        } label: {
+                            Text(segment)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(index == pathStack.count - 1 ? AppTheme.colors.accent : AppTheme.colors.secondaryText)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule()
+                                        .fill(index == pathStack.count - 1 ? AppTheme.colors.accent.opacity(0.15) : AppTheme.colors.cardBackground)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+    
+    // MARK: - Main Content Grid (4 Columns)
+    
+    @ViewBuilder
+    private var mainContentGrid: some View {
+        // Calculate current path
+        let currentPath: String? = pathStack.isEmpty ? nil : pathStack.joined(separator: "/")
+        
+        // Get folders - always get direct children of current path
+        let folders: [FolderNode] = {
+            if !searchText.isEmpty {
+                // When searching, filter all folders by search text
+                let lower = searchText.lowercased()
+                return vaultStore.folderNodes().filter { folder in
+                    folder.name.lowercased().contains(lower) || folder.path.lowercased().contains(lower)
+                }
+            } else {
+                // When not searching, get only direct children of current path
+                return vaultStore.folderChildren(of: currentPath)
+            }
+        }()
+        
+        // Apply filter and sort to items
+        let filteredItems = vaultStore.filteredItems(
+            filter: filter,
+            searchText: searchText.isEmpty ? "" : searchText,
+            sort: sort
+        )
+        
+        // Filter items to show only items in current path (if not searching)
+        let displayedItems: [VaultItem] = {
+            if !searchText.isEmpty {
+                // When searching, show all matching items regardless of path
+                return filteredItems
+            } else {
+                // When not searching, filter by current path
+                return filteredItems.filter { item in
+                    if pathStack.isEmpty {
+                        // At root: show items with no folder or empty folder
+                        return item.folder == nil || item.folder?.isEmpty == true
+                    } else {
+                        // Inside folder: show items that match exact path
+                        return item.folder == currentPath
+                    }
+                }
+            }
+        }()
+        
+        // Separate pinned and unpinned items
+        let pinnedItems = displayedItems.filter { vaultStore.pinnedIDs.contains($0.id) }
+        let unpinnedItems = displayedItems.filter { !vaultStore.pinnedIDs.contains($0.id) }
+        
+        Group {
+            if vaultStore.isLoading {
+                loadingState
+            } else if displayedItems.isEmpty && folders.isEmpty {
+                emptyState
+            } else {
+                VStack(spacing: 20) {
+                    // Folders - Always show if there are folders
+                    if !folders.isEmpty {
+                        foldersGridSection(title: NSLocalizedString("Folders", comment: ""), folders: folders)
+                    }
+                    
+                    // Pinned Items
+                    if !pinnedItems.isEmpty {
+                        itemsGridSection(title: NSLocalizedString("Pinned", comment: ""), items: pinnedItems)
+                    }
+                    
+                    // Regular Items
+                    if !unpinnedItems.isEmpty {
+                        itemsGridSection(title: NSLocalizedString("Files", comment: ""), items: unpinnedItems)
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+        }
+    }
+    
+    private func foldersGridSection(title: String, folders: [FolderNode]) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(AppTheme.colors.primaryText)
+                .padding(.horizontal, 20)
+            
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8)
+            ], spacing: 8) {
+                ForEach(folders) { folder in
+                    Button {
+                        HapticFeedback.play(.light)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            let folderPathParts = folder.path.split(separator: "/").map(String.init)
+                            pathStack = folderPathParts
+                        }
+                    } label: {
+                        VStack(spacing: 8) {
+                            Image(systemName: "folder.fill")
+                                .font(.system(size: 32))
+                                .foregroundStyle(AppTheme.colors.accent)
+                                .frame(width: 80, height: 80)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(AppTheme.colors.accent.opacity(0.15))
+                                )
+                            
+                            Text(folder.name)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(AppTheme.colors.primaryText)
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.bottom, 24)
+    }
+    
+    private func itemsGridSection(title: String, items: [VaultItem]) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(AppTheme.colors.primaryText)
+                .padding(.horizontal, 20)
+            
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8)
+            ], spacing: 8) {
+                ForEach(items) { item in
+                    if selectionMode {
+                        ItemCard4Column(item: item, isSelected: selectedItems.contains(item.id)) {
+                            toggleSelection(for: item.id)
+                        }
+                    } else {
+                        NavigationLink {
+                            FileViewer(item: item)
+                        } label: {
+                            ItemCard4Column(
+                                item: item,
+                                isSelected: false,
+                                vaultStore: vaultStore,
+                                onShare: {
+                                    Task {
+                                        await prepareShare(for: item)
+                                    }
+                                },
+                                onPin: {
+                                    vaultStore.togglePin(id: item.id)
+                                },
+                                onDelete: {
+                                    deleteTarget = .file(item)
+                                }
+                            ) {}
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button {
+                                Task { await prepareShare(for: item) }
+                            } label: {
+                                Label(NSLocalizedString("Share", comment: ""), systemImage: "square.and.arrow.up")
+                            }
+                            
+                            Button {
+                                vaultStore.togglePin(id: item.id)
+                            } label: {
+                                Label(
+                                    vaultStore.pinnedIDs.contains(item.id) ? NSLocalizedString("Unpin", comment: "") : NSLocalizedString("Pin", comment: ""),
+                                    systemImage: vaultStore.pinnedIDs.contains(item.id) ? "pin.slash" : "pin"
+                                )
+                            }
+                            
+                            Divider()
+                            
+                            Button(role: .destructive) {
+                                deleteTarget = .file(item)
+                            } label: {
+                                Label(NSLocalizedString("Delete", comment: ""), systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.bottom, 24)
+    }
+    
+    // MARK: - Selection Mode Bar
+    
+    private var selectionModeBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                HapticFeedback.play(.light)
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    selectionMode = false
+                    selectedItems.removeAll()
+                }
+            } label: {
+                Text(NSLocalizedString("Cancel", comment: ""))
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(AppTheme.colors.secondaryText)
+            }
+            
+            Spacer()
+            
+            Text("\(selectedItems.count)")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(AppTheme.colors.accent)
+            Text(NSLocalizedString("Selected", comment: ""))
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(AppTheme.colors.primaryText)
+            
+            Spacer()
+            
+            if selectedItems.isEmpty {
+                Button {
+                    HapticFeedback.play(.light)
+                    toggleSelectAll()
+                } label: {
+                    Text(NSLocalizedString("Select All", comment: ""))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AppTheme.colors.accent)
+                }
+            } else {
+                Button {
+                    HapticFeedback.play(.light)
+                    moveItemIDs = selectedItems
+                    showMoveItemPicker = true
+                } label: {
+                    Image(systemName: "folder.badge.arrow.in")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(AppTheme.colors.accent)
+                }
+                Button {
+                    HapticFeedback.play(.light)
+                    Task { await shareSelectedItems() }
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(AppTheme.colors.accent)
+                }
+                Button(role: .destructive) {
+                    HapticFeedback.play(.warning)
+                    showBulkDeleteConfirm = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(AppTheme.colors.cardBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(AppTheme.colors.cardBorder, lineWidth: 1.5)
+                )
+                .shadow(color: .black.opacity(0.08), radius: 16, x: 0, y: 4)
+        )
+        .padding(.horizontal, 20)
+        .padding(.bottom, 24)
+    }
+    
+    // MARK: - States
+    
+    private var loadingState: some View {
+        LazyVGrid(columns: [
+            GridItem(.flexible(), spacing: 8),
+            GridItem(.flexible(), spacing: 8),
+            GridItem(.flexible(), spacing: 8),
+            GridItem(.flexible(), spacing: 8)
+        ], spacing: 8) {
+            ForEach(0..<20, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(AppTheme.colors.cardBackground)
+                    .aspectRatio(1, contentMode: .fit)
+                    .redacted(reason: .placeholder)
+            }
+        }
+        .padding(.horizontal, 16)
+        .allowsHitTesting(false)
+    }
 
-    private var content: some View {
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "folder")
+                .font(.system(size: 48, weight: .light))
+                .foregroundStyle(AppTheme.colors.secondaryText.opacity(0.5))
+            
+            Text(NSLocalizedString("No files yet", comment: ""))
+                .font(AppTheme.fonts.subtitle)
+                .foregroundStyle(AppTheme.colors.primaryText)
+            
+            Text(NSLocalizedString("Import to get started.", comment: ""))
+                .font(AppTheme.fonts.caption)
+                .foregroundStyle(AppTheme.colors.secondaryText)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 60)
+    }
+    
+    // MARK: - Helpers
+    
+    private func getRecentItems() -> [VaultItem] {
+        var items = vaultStore.recentOpenedItems()
+        
+        let calendar = Calendar.current
+        let now = Date()
+        
+        switch selectedRecentsFilter {
+        case .all:
+            break
+        case .today:
+            items = items.filter { calendar.isDate($0.createdAt, inSameDayAs: now) }
+        case .week:
+            items = items.filter {
+                let days = calendar.dateComponents([.day], from: $0.createdAt, to: now).day ?? 0
+                return days <= 7
+            }
+        }
+        
+        return items
+    }
+    
+    private func toggleSelection(for id: UUID) {
+        HapticFeedback.play(.selection)
+        if selectedItems.contains(id) {
+            selectedItems.remove(id)
+        } else {
+            selectedItems.insert(id)
+        }
+    }
+    
+    private func toggleSelectAll() {
         let items = vaultStore.filteredItems(filter: filter, searchText: searchText, sort: sort)
         let currentPath = pathStack.joined(separator: "/")
-        let allFolders = vaultStore.folderChildren(of: pathStack.isEmpty ? nil : currentPath)
         let displayedItems = items.filter { item in
             if pathStack.isEmpty {
                 return item.folder == nil || item.folder?.isEmpty == true
             }
             return item.folder == currentPath
         }
-        let pinnedItems = displayedItems.filter { vaultStore.pinnedIDs.contains($0.id) }
-        let unpinnedItems = displayedItems.filter { !vaultStore.pinnedIDs.contains($0.id) }
-        let normalizedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let folders: [FolderNode]
-        if filter == .all && normalizedSearch.isEmpty {
-            folders = allFolders
+        
+        if selectedItems.count == displayedItems.count {
+            selectedItems.removeAll()
         } else {
-            folders = allFolders.filter { folder in
-                let nameMatches = !normalizedSearch.isEmpty
-                    && folder.name.lowercased().contains(normalizedSearch)
-                let itemMatches = items.contains { item in
-                    guard let folderPath = item.folder, !folderPath.isEmpty else { return false }
-                    if folderPath == folder.path { return true }
-                    return folderPath.hasPrefix(folder.path + "/")
-                }
-                return nameMatches || itemMatches
-            }
-        }
-        return Group {
-            if vaultStore.isLoading {
-                loadingState
-            } else if items.isEmpty && folders.isEmpty {
-                emptyState
-            } else {
-                List {
-                    if !folders.isEmpty {
-                        Section("Folders") {
-                            ForEach(folders) { folder in
-                                HStack(spacing: 12) {
-                                    Image(systemName: "folder.fill")
-                                        .foregroundStyle(AppTheme.colors.accent)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(folder.name)
-                                            .font(AppTheme.fonts.body)
-                                        Text(ByteCountFormatter.string(fromByteCount: folder.totalSize, countStyle: .file))
-                                            .font(AppTheme.fonts.caption)
-                                            .foregroundStyle(AppTheme.colors.secondaryText)
-                                    }
-                                    Spacer()
-                                }
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    pathStack.append(folder.name)
-                                }
-                                .onDrag {
-                                    NSItemProvider(object: "folder:\(folder.path)" as NSString)
-                                }
-                                .onDrop(of: [UTType.text], delegate: VaultDropDelegate(targetFolderPath: folder.path, vaultStore: vaultStore))
-                                .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) {
-                                        deleteTarget = .folder(folder)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                                .contextMenu {
-                                    Button {
-                                        saveFolderPath = folder.path
-                                        saveFolderName = folder.name
-                                        showSaveFolderPrompt = true
-                                    } label: {
-                                        Label("Save to Files", systemImage: "tray.and.arrow.down")
-                                    }
-                                    Button {
-                                        Task {
-                                            let url = try? await vaultStore.temporaryShareURL(forFolderPath: folder.path, name: folder.name)
-                                            if let url {
-                                                lastSharedURL = url
-                                                shareItem = ShareItem(url: url)
-                                            }
-                                        }
-                                    } label: {
-                                        Label("Share", systemImage: "square.and.arrow.up")
-                                    }
-                                    Button {
-                                        moveFolderPath = folder.path
-                                        showMoveFolderPicker = true
-                                    } label: {
-                                        Label("Move", systemImage: "folder")
-                                    }
-                                    Button("Delete", role: .destructive) {
-                                        deleteTarget = .folder(folder)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if !pinnedItems.isEmpty {
-                        Section("Pinned") {
-                            ForEach(pinnedItems) { item in
-                                fileRow(item)
-                            }
-                        }
-                    }
-                    Section("Files") {
-                        ForEach(unpinnedItems) { item in
-                            fileRow(item)
-                        }
-                    }
-                }
-                .listStyle(.insetGrouped)
-                .scrollContentBackground(.hidden)
-                .animation(.easeInOut(duration: 0.2), value: selectionMode)
-                .onDrop(of: [UTType.text], delegate: VaultDropDelegate(targetFolderPath: nil, vaultStore: vaultStore))
-                .refreshable {
-                    await vaultStore.refresh()
-                }
-            }
+            selectedItems = Set(displayedItems.map { $0.id })
         }
     }
-
-    private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "folder")
-                .font(.system(size: 36))
-                .foregroundStyle(AppTheme.colors.secondaryText)
-            Text("No Files")
-                .font(AppTheme.fonts.subtitle)
-            Text("Import to get started.")
-                .font(AppTheme.fonts.caption)
-                .foregroundStyle(AppTheme.colors.secondaryText)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var selectionBar: some View {
-        let total = selectionCandidateIDs().count
-        let selectedCount = selectedItems.count
-        return HStack(spacing: 12) {
-            Text("\(selectedCount) \(NSLocalizedString("Selected", comment: ""))")
-                .font(AppTheme.fonts.subtitle)
-            Spacer()
-            Button {
-                HapticFeedback.play(.selection)
-                toggleSelectAll()
-            } label: {
-                Image(systemName: selectedCount == total && total > 0 ? "minus.circle" : "checkmark.circle")
-            }
-            .buttonStyle(AppTheme.buttons.secondary)
-            .accessibilityLabel(Text(NSLocalizedString(selectedCount == total && total > 0 ? "Clear" : "Select All", comment: "")))
-            Button {
-                HapticFeedback.play(.light)
-                selectionMode = false
-                selectedItems.removeAll()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-            }
-            .buttonStyle(AppTheme.buttons.primary)
-            .accessibilityLabel(Text(NSLocalizedString("Done", comment: "")))
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
-    }
-
-    private var loadingState: some View {
-        List {
-            Section("Folders") {
-                ForEach(0..<2, id: \.self) { _ in
-                    HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(AppTheme.colors.cardBackground)
-                            .frame(width: 34, height: 28)
-                        VStack(alignment: .leading, spacing: 6) {
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(AppTheme.colors.cardBackground)
-                                .frame(height: 12)
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(AppTheme.colors.cardBackground)
-                                .frame(width: 120, height: 10)
-                        }
-                        Spacer()
-                    }
-                    .redacted(reason: .placeholder)
-                }
-            }
-            Section("Files") {
-                ForEach(0..<6, id: \.self) { _ in
-                    HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(AppTheme.colors.cardBackground)
-                            .frame(width: 52, height: 52)
-                        VStack(alignment: .leading, spacing: 6) {
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(AppTheme.colors.cardBackground)
-                                .frame(height: 12)
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(AppTheme.colors.cardBackground)
-                                .frame(width: 140, height: 10)
-                        }
-                        Spacer()
-                    }
-                    .redacted(reason: .placeholder)
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .allowsHitTesting(false)
-    }
-
-    private var filterBar: some View {
-        HStack(spacing: 10) {
-            ForEach(VaultStore.FilterOption.allCases) { option in
-                Button {
-                    if filter != option {
-                        HapticFeedback.play(.selection)
-                    }
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        filter = option
-                    }
-                } label: {
-                    Image(systemName: filterIcon(option))
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 34, height: 34)
-                        .foregroundStyle(filter == option ? AppTheme.colors.accent : AppTheme.colors.primaryText)
-                        .background(
-                            Circle()
-                                .fill(filter == option ? AppTheme.colors.accent.opacity(0.18) : AppTheme.colors.surface)
-                        )
-                        .overlay(
-                            Circle()
-                                .stroke(AppTheme.colors.cardBorder, lineWidth: 1)
-                        )
-                        .accessibilityLabel(Text(NSLocalizedString(option.rawValue, comment: "")))
-                }
-                .buttonStyle(InteractiveButtonStyle(hapticStyle: .selection))
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-    }
-
-    private func filterIcon(_ option: VaultStore.FilterOption) -> String {
-        switch option {
-        case .all:
-            return "square.grid.2x2"
-        case .images:
-            return "photo"
-        case .videos:
-            return "video"
-        case .documents:
-            return "doc.text"
-        case .others:
-            return "ellipsis.circle"
-        }
-    }
-
-    private var breadcrumbBar: some View {
-        HStack(spacing: 8) {
-            if !pathStack.isEmpty {
-                Button {
-                    _ = pathStack.popLast()
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .buttonStyle(.plain)
-            }
-            BreadcrumbView(segments: pathStack) { index in
-                if let index {
-                    pathStack = Array(pathStack.prefix(index + 1))
-                } else {
-                    pathStack.removeAll()
-                }
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-    }
-
+    
     private func deleteSelected() {
         try? vaultStore.deleteItems(ids: selectedItems)
         selectedItems.removeAll()
         selectionMode = false
     }
-
-    private func selectionCandidateIDs() -> [UUID] {
-        let items = vaultStore.filteredItems(filter: filter, searchText: searchText, sort: sort)
-        let currentPath = pathStack.joined(separator: "/")
-        let displayedItems = items.filter { item in
-            if pathStack.isEmpty {
-                return item.folder == nil || item.folder?.isEmpty == true
-            }
-            return item.folder == currentPath
-        }
-        return displayedItems.map { $0.id }
-    }
-
-    private func toggleSelectAll() {
-        let candidates = selectionCandidateIDs()
-        if candidates.isEmpty {
-            selectedItems.removeAll()
-            return
-        }
-        let candidateSet = Set(candidates)
-        if selectedItems == candidateSet {
-            selectedItems.removeAll()
-        } else {
-            selectedItems = candidateSet
-        }
-    }
-
-    private func fileRow(_ item: VaultItem) -> some View {
-        VaultRow(
-            item: item,
-            selectionMode: selectionMode,
-            selectedItems: $selectedItems,
-            isPinned: vaultStore.pinnedIDs.contains(item.id),
-            onPin: { vaultStore.togglePin(id: item.id) }
-        )
-        .onDrag {
-            NSItemProvider(object: "file:\(item.id.uuidString)" as NSString)
-        }
-        .swipeActions(edge: .trailing) {
-            Button(role: .destructive) {
-                deleteTarget = .file(item)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-            Button {
-                Task {
-                    let url = try? await vaultStore.temporaryShareURL(for: item)
-                    if let url {
-                        lastSharedURL = url
-                        shareItem = ShareItem(url: url)
-                    }
-                }
-            } label: {
-                Label("Share", systemImage: "square.and.arrow.up")
-            }
-        }
-        .swipeActions(edge: .leading) {
-            Button {
-                vaultStore.togglePin(id: item.id)
-            } label: {
-                Label(vaultStore.pinnedIDs.contains(item.id) ? "Unpin" : "Pin", systemImage: "pin")
-            }
-            .tint(.orange)
-        }
-        .contextMenu {
-            Button {
-                Task {
-                    let url = try? await vaultStore.temporaryShareURL(for: item)
-                    if let url {
-                        lastSharedURL = url
-                        shareItem = ShareItem(url: url)
-                    }
-                }
-            } label: {
-                Label("Save to Files", systemImage: "tray.and.arrow.down")
-            }
-            Button {
-                Task {
-                    let url = try? await vaultStore.temporaryShareURL(for: item)
-                    if let url {
-                        lastSharedURL = url
-                        shareItem = ShareItem(url: url)
-                    }
-                }
-            } label: {
-                Label("Share", systemImage: "square.and.arrow.up")
-            }
-            Button {
-                moveItemIDs = [item.id]
-                showMoveItemPicker = true
-            } label: {
-                Label("Move", systemImage: "folder")
-            }
-            Button("Delete", role: .destructive) {
-                deleteTarget = .file(item)
-            }
-        }
-    }
+    
     private func handleDeleteConfirmed(_ target: DeleteTarget) {
         defer { deleteTarget = nil }
         switch target {
         case .file(let item):
             try? vaultStore.deleteItems(ids: [item.id])
+            if aiEnabled {
+                AILearningManager.shared.learnFromDeletion(item: item)
+            }
         case .folder(let folder):
             vaultStore.deleteFolder(path: folder.path)
         }
     }
-
+    
     private func saveFolderToFiles() async {
         guard let saveFolderPath else { return }
         let trimmed = saveFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = trimmed.isEmpty ? saveFolderPath.split(separator: "/").last.map(String.init) ?? "Folder" : trimmed
         if let url = try? await vaultStore.temporaryShareURL(forFolderPath: saveFolderPath, name: name) {
-            lastSharedURL = url
-            shareItem = ShareItem(url: url)
+            lastSharedURLs = [url]
+            shareItem = ShareItem(urls: [url])
         }
         self.saveFolderPath = nil
         self.saveFolderName = ""
     }
-
-}
-
-private struct BreadcrumbView: View {
-    let segments: [String]
-    let onSelect: (Int?) -> Void
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                Button {
-                    onSelect(nil)
-                } label: {
-                    Text("Home")
-                        .font(AppTheme.fonts.caption)
-                        .foregroundStyle(AppTheme.colors.secondaryText)
-                }
-                .buttonStyle(.plain)
-                ForEach(segments.indices, id: \.self) { index in
-                    Text("›")
-                        .font(AppTheme.fonts.caption)
-                        .foregroundStyle(AppTheme.colors.secondaryText)
-                    Button {
-                        onSelect(index)
-                    } label: {
-                        Text(segments[index])
-                            .font(AppTheme.fonts.caption)
-                            .foregroundStyle(AppTheme.colors.primaryText)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
+    
+    private func loadAISuggestions() async {
+        guard aiEnabled else { return }
+        isLoadingSuggestions = true
+        defer { isLoadingSuggestions = false }
+        
+        let suggestions = AIManager.shared.getSmartSuggestions(for: vaultStore.items)
+        await MainActor.run {
+            aiSuggestions = suggestions
         }
     }
-}
-
-private extension VaultHomeView {
-    func availableFolderDestinations(for path: String?) -> [FolderNode] {
+    
+    private func availableFolderDestinations(for path: String?) -> [FolderNode] {
         guard let path else { return vaultStore.folderNodes() }
         let all = flatten(folders: vaultStore.folderNodes())
         return all.filter { !$0.path.hasPrefix(path) && $0.path != path }
     }
 
-    func flatten(folders: [FolderNode]) -> [FolderNode] {
+    private func flatten(folders: [FolderNode]) -> [FolderNode] {
         var result: [FolderNode] = []
         for folder in folders {
             result.append(folder)
@@ -618,6 +1110,603 @@ private extension VaultHomeView {
         }
         return result
     }
+    
+    private func prepareShare(for item: VaultItem) async {
+        do {
+            let url = try await vaultStore.temporaryShareURL(for: item)
+            lastSharedURLs = [url]
+            shareItem = ShareItem(urls: [url])
+        } catch {
+            shareItem = nil
+        }
+    }
+    
+    private func shareSelectedItems() async {
+        let itemsToShare = vaultStore.items.filter { selectedItems.contains($0.id) }
+        var urls: [URL] = []
+        for item in itemsToShare {
+            if let url = try? await vaultStore.temporaryShareURL(for: item) {
+                urls.append(url)
+            }
+        }
+        guard !urls.isEmpty else { return }
+        lastSharedURLs = urls
+        shareItem = ShareItem(urls: urls)
+    }
+    
+    // MARK: - Import Handling
+    
+    private func enqueueImports(_ results: [ImportResult]) {
+        pendingImports.append(contentsOf: results)
+        if !isProcessingImport {
+            Task { await processNextImport() }
+        }
+    }
+    
+    private func processNextImport() async {
+        guard !pendingImports.isEmpty else {
+            isProcessingImport = false
+            if !pendingDeletionAssetIds.isEmpty {
+                showDeleteOriginalAlert = true
+            }
+            if !duplicateImports.isEmpty {
+                showBulkDuplicateAlert = true
+            }
+            return
+        }
+        isProcessingImport = true
+        let result = pendingImports[0]
+        await handleImport(result)
+    }
+    
+    private func finishCurrentImport() {
+        if !pendingImports.isEmpty {
+            pendingImports.removeFirst()
+        }
+        Task { await processNextImport() }
+    }
+    
+    private var deleteOriginalTitle: String {
+        pendingDeletionAssetIds.count > 1
+            ? NSLocalizedString("Delete original photos?", comment: "")
+            : NSLocalizedString("Delete original photo?", comment: "")
+    }
+    
+    private func handleImport(_ result: ImportResult) async {
+        var category: String? = nil
+        if aiEnabled, result.isImage {
+            category = await AIManager.shared.classifyImage(result.data)
+        }
+        let folder = normalizedCurrentFolderPath ?? category
+        if vaultStore.existingItem(named: result.originalName, inFolder: folder) != nil {
+            duplicateImports.append(PendingImportContext(result: result, folder: folder, category: category))
+            finishCurrentImport()
+            return
+        }
+        do {
+            try await vaultStore.addItem(
+                data: result.data,
+                originalName: result.originalName,
+                mimeType: result.mimeType,
+                isImage: result.isImage,
+                category: category,
+                folder: folder
+            )
+            if let assetId = result.assetIdentifier {
+                pendingDeletionAssetIds.append(assetId)
+            }
+            selectionMode = false
+        } catch {
+            print("Import failed: \(error)")
+        }
+        finishCurrentImport()
+    }
+    
+    private func replacePendingImport() async {
+        guard let pendingImport else { return }
+        let folder: String?
+        if let normalizedCurrentFolderPath {
+            folder = normalizedCurrentFolderPath
+        } else if aiEnabled && pendingImport.isImage {
+            folder = await AIManager.shared.classifyImage(pendingImport.data)
+        } else {
+            folder = nil
+        }
+        if let existing = vaultStore.existingItem(named: pendingImport.originalName, inFolder: folder) {
+            try? vaultStore.deleteItems(ids: [existing.id])
+        }
+        do {
+            try await vaultStore.addItem(
+                data: pendingImport.data,
+                originalName: pendingImport.originalName,
+                mimeType: pendingImport.mimeType,
+                isImage: pendingImport.isImage,
+                category: folder,
+                folder: folder
+            )
+            if let assetId = pendingImport.assetIdentifier {
+                pendingDeletionAssetIds.append(assetId)
+            }
+            selectionMode = false
+        } catch {
+            print("Import failed: \(error)")
+        }
+        self.pendingImport = nil
+        finishCurrentImport()
+    }
+    
+    private func handleBulkDuplicates(mode: BulkDuplicateMode) async {
+        let contexts = duplicateImports
+        duplicateImports.removeAll()
+        var reservedNames: [String: Set<String>] = [:]
+        
+        for context in contexts {
+            let folderKey = context.folder ?? ""
+            if reservedNames[folderKey] == nil {
+                reservedNames[folderKey] = Set(
+                    vaultStore.items
+                        .filter { $0.folder == context.folder }
+                        .map { $0.originalName }
+                )
+            }
+            var targetName = context.result.originalName
+            if mode != .skipAll {
+                if mode == .replaceAll {
+                    if let existing = vaultStore.existingItem(named: targetName, inFolder: context.folder) {
+                        try? vaultStore.deleteItems(ids: [existing.id])
+                        reservedNames[folderKey]?.remove(existing.originalName)
+                    }
+                }
+                if mode == .keepBoth || (reservedNames[folderKey]?.contains(targetName) ?? false) {
+                    targetName = uniqueName(base: targetName, used: &reservedNames[folderKey]!)
+                }
+            }
+            
+            guard mode != .skipAll else { continue }
+            do {
+                try await vaultStore.addItem(
+                    data: context.result.data,
+                    originalName: targetName,
+                    mimeType: context.result.mimeType,
+                    isImage: context.result.isImage,
+                    category: context.category,
+                    folder: context.folder
+                )
+                if let assetId = context.result.assetIdentifier {
+                    pendingDeletionAssetIds.append(assetId)
+                }
+            } catch {
+                print("Bulk import failed: \(error)")
+            }
+        }
+        
+        if !pendingDeletionAssetIds.isEmpty {
+            showDeleteOriginalAlert = true
+        }
+    }
+    
+    private func uniqueName(base: String, used: inout Set<String>) -> String {
+        if !used.contains(base) {
+            used.insert(base)
+            return base
+        }
+        let ext = (base as NSString).pathExtension
+        let name = (base as NSString).deletingPathExtension
+        var counter = 1
+        while true {
+            let candidate = "\(name) (\(counter))" + (ext.isEmpty ? "" : ".\(ext)")
+            if !used.contains(candidate) {
+                used.insert(candidate)
+                return candidate
+            }
+            counter += 1
+        }
+    }
+    
+    private func makeFolderPath(_ name: String) -> String {
+        guard let currentFolderPath = normalizedCurrentFolderPath else {
+            return name
+        }
+        return currentFolderPath + "/" + name
+    }
+    
+    private var normalizedCurrentFolderPath: String? {
+        let trimmed = (pathStack.isEmpty ? nil : pathStack.joined(separator: "/"))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+
+// MARK: - Story Circle Component (Snapchat Style)
+
+private struct StoryCircle: View {
+    let item: VaultItem
+    @Environment(\.layoutDirection) var layoutDirection
+    
+    var body: some View {
+        ZStack {
+            // Outer ring (gradient)
+            Circle()
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            AppTheme.colors.accent,
+                            AppTheme.colors.accent.opacity(0.6),
+                            AppTheme.colors.accent.opacity(0.3)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 3
+                )
+                .frame(width: 84, height: 84)
+            
+            // Thumbnail - slightly larger to avoid clipping
+            VaultThumbnailView(item: item, size: 74)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(AppTheme.colors.background, lineWidth: 2)
+                )
+        }
+    }
+}
+
+// MARK: - Folder Card Horizontal
+
+private struct FolderCardHorizontal: View {
+    let folder: FolderNode
+    let action: () -> Void
+    @Environment(\.layoutDirection) var layoutDirection
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 24))
+                    .foregroundStyle(AppTheme.colors.accent)
+                    .frame(width: 50, height: 50)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(AppTheme.colors.accent.opacity(0.15))
+                    )
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(folder.name)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AppTheme.colors.primaryText)
+                        .lineLimit(1)
+                    
+                    Text(ByteCountFormatter.string(fromByteCount: folder.totalSize, countStyle: .file))
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(AppTheme.colors.secondaryText)
+                }
+                
+                Spacer()
+                
+                Image(systemName: layoutDirection == .rightToLeft ? "chevron.left" : "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.colors.secondaryText)
+            }
+            .padding(14)
+            .frame(width: 280)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(AppTheme.colors.cardBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        AppTheme.colors.cardBorder,
+                                        AppTheme.colors.cardBorder.opacity(0.3)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.5
+                            )
+                    )
+                    .shadow(color: AppTheme.colors.accentGlow.opacity(0.1), radius: 8, x: 0, y: 4)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Custom Filter Button
+
+private struct CustomFilterButton: View {
+    let title: String
+    let icon: String
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                
+                Text(title)
+                    .font(.system(size: 14, weight: isSelected ? .semibold : .medium))
+            }
+            .foregroundStyle(isSelected ? .white : AppTheme.colors.secondaryText)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                Group {
+                    if isSelected {
+                        Capsule()
+                            .fill(AppTheme.gradients.accent)
+                    } else {
+                        Capsule()
+                            .fill(AppTheme.colors.cardBackground)
+                            .overlay(
+                                Capsule()
+                                    .stroke(AppTheme.colors.cardBorder, lineWidth: 1.5)
+                            )
+                    }
+                }
+            )
+            .shadow(
+                color: isSelected ? AppTheme.colors.accent.opacity(0.3) : Color.clear,
+                radius: isSelected ? 8 : 0,
+                x: 0,
+                y: isSelected ? 4 : 0
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Item Card 4 Columns (Fixed)
+
+private struct ItemCard4Column: View {
+    let item: VaultItem
+    let isSelected: Bool
+    let vaultStore: VaultStore?
+    let onShare: (() -> Void)?
+    let onPin: (() -> Void)?
+    let onDelete: (() -> Void)?
+    let action: () -> Void
+    
+    init(
+        item: VaultItem,
+        isSelected: Bool,
+        vaultStore: VaultStore? = nil,
+        onShare: (() -> Void)? = nil,
+        onPin: (() -> Void)? = nil,
+        onDelete: (() -> Void)? = nil,
+        action: @escaping () -> Void
+    ) {
+        self.item = item
+        self.isSelected = isSelected
+        self.vaultStore = vaultStore
+        self.onShare = onShare
+        self.onPin = onPin
+        self.onDelete = onDelete
+        self.action = action
+    }
+    
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                VaultThumbnailView(item: item, size: 100)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(AppTheme.colors.accent.opacity(0.4))
+                        .overlay(
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 20))
+                                .foregroundStyle(.white)
+                        )
+                }
+            }
+            .aspectRatio(1, contentMode: .fit)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Floating Action Button (FAB)
+
+private struct FloatingActionButton: View {
+    @Binding var showMenu: Bool
+    let onTap: () -> Void
+    let onAddFile: () -> Void
+    let onAddFolder: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            if showMenu {
+                // Menu items
+                VStack(spacing: 12) {
+                    FABMenuItem(
+                        icon: "photo.on.rectangle",
+                        title: NSLocalizedString("Add Files", comment: ""),
+                        color: AppTheme.colors.accent
+                    ) {
+                        onAddFile()
+                    }
+                    
+                    FABMenuItem(
+                        icon: "folder.badge.plus",
+                        title: NSLocalizedString("New Folder", comment: ""),
+                        color: AppTheme.colors.accent
+                    ) {
+                        onAddFolder()
+                    }
+                }
+                .transition(.scale.combined(with: .opacity))
+            }
+            
+            // Main FAB button
+            Button(action: {
+                HapticFeedback.play(.medium)
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    onTap()
+                }
+            }) {
+                ZStack {
+                    Circle()
+                        .fill(AppTheme.gradients.accent)
+                        .frame(width: 56, height: 56)
+                        .shadow(color: AppTheme.colors.accent.opacity(0.4), radius: 12, x: 0, y: 6)
+                    
+                    Image(systemName: showMenu ? "xmark" : "plus")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .rotationEffect(.degrees(showMenu ? 45 : 0))
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+private struct FABMenuItem: View {
+    let icon: String
+    let title: String
+    let color: Color
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: {
+            HapticFeedback.play(.light)
+            action()
+        }) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        Circle()
+                            .fill(color)
+                    )
+                
+                Text(title)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(AppTheme.colors.primaryText)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        Capsule()
+                            .fill(AppTheme.colors.cardBackground)
+                            .overlay(
+                                Capsule()
+                                    .stroke(AppTheme.colors.cardBorder, lineWidth: 1.5)
+                            )
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+
+// MARK: - Other Components
+
+private struct AISuggestionCard: View {
+    let suggestion: AISuggestion
+    @ObservedObject var vaultStore: VaultStore
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: suggestion.icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(AppTheme.gradients.accent)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Circle()
+                            .fill(AppTheme.colors.accent.opacity(0.15))
+                    )
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(suggestion.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(AppTheme.colors.primaryText)
+                    
+                    Text(suggestion.description)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(AppTheme.colors.secondaryText)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 180)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(AppTheme.colors.cardBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    AppTheme.colors.accent.opacity(0.3),
+                                    AppTheme.colors.accent.opacity(0.1)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.5
+                        )
+                )
+                .shadow(color: AppTheme.colors.accent.opacity(0.1), radius: 8, x: 0, y: 4)
+        )
+    }
+}
+
+private struct FilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: isSelected ? .semibold : .medium))
+                .foregroundStyle(isSelected ? AppTheme.colors.primaryText : AppTheme.colors.secondaryText)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    Group {
+                        if isSelected {
+                            Capsule()
+                                .fill(AppTheme.gradients.accent)
+                        } else {
+                            Capsule()
+                                .fill(AppTheme.colors.cardBackground)
+                        }
+                    }
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(
+                            isSelected ? Color.clear : AppTheme.colors.cardBorder,
+                            lineWidth: 1
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private enum BulkDuplicateMode {
+    case replaceAll
+    case keepBoth
+    case skipAll
+}
+
+private struct PendingImportContext {
+    let result: ImportResult
+    let folder: String?
+    let category: String?
 }
 
 private enum DeleteTarget: Identifiable {
@@ -653,133 +1742,6 @@ private enum DeleteTarget: Identifiable {
 }
 
 private struct ShareItem: Identifiable {
-    let url: URL
-    var id: URL { url }
-}
-
-private struct VaultDropDelegate: DropDelegate {
-    let targetFolderPath: String?
-    let vaultStore: VaultStore
-
-    func performDrop(info: DropInfo) -> Bool {
-        let providers = info.itemProviders(for: [UTType.text])
-        guard let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.text.identifier, options: nil) { item, _ in
-            let text: String?
-            if let data = item as? Data {
-                text = String(data: data, encoding: .utf8)
-            } else if let string = item as? String {
-                text = string
-            } else {
-                text = nil
-            }
-            guard let text else { return }
-            Task { @MainActor in
-                if text.hasPrefix("file:") {
-                    let raw = text.replacingOccurrences(of: "file:", with: "")
-                    if let id = UUID(uuidString: raw) {
-                        let currentFolder = vaultStore.items.first(where: { $0.id == id })?.folder ?? ""
-                        if let targetFolderPath {
-                            guard currentFolder != targetFolderPath else { return }
-                            try? vaultStore.assignFolder(forIDs: [id], folderPath: targetFolderPath)
-                        } else {
-                            if currentFolder.isEmpty { return }
-                            try? vaultStore.assignFolder(forIDs: [id], folderPath: "")
-                        }
-                    }
-                } else if text.hasPrefix("folder:") {
-                    let source = text.replacingOccurrences(of: "folder:", with: "")
-                    if let targetFolderPath {
-                        guard source != targetFolderPath else { return }
-                        if targetFolderPath.hasPrefix(source + "/") { return }
-                        try? vaultStore.moveFolder(from: source, to: targetFolderPath)
-                    } else {
-                        if !source.contains("/") { return }
-                        try? vaultStore.moveFolder(from: source, to: nil)
-                    }
-                }
-            }
-        }
-        return true
-    }
-
-    func dropEntered(info: DropInfo) {}
-    func dropExited(info: DropInfo) {}
-}
-
-private struct FilterChipStyle: ButtonStyle {
-    let isSelected: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(AppTheme.fonts.caption)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(isSelected ? AppTheme.colors.accent.opacity(0.18) : AppTheme.colors.surface)
-            .foregroundStyle(isSelected ? AppTheme.colors.accent : AppTheme.colors.primaryText)
-            .clipShape(Capsule())
-            .shadow(color: Color.black.opacity(0.05), radius: 6, x: 0, y: 2)
-            .opacity(configuration.isPressed ? 0.8 : 1)
-    }
-}
-
-private struct VaultRow: View {
-    let item: VaultItem
-    let selectionMode: Bool
-    @Binding var selectedItems: Set<UUID>
-    let isPinned: Bool
-    let onPin: () -> Void
-
-    var body: some View {
-        Group {
-            if selectionMode {
-                rowContent
-                    .onTapGesture { toggleSelection() }
-            } else {
-                NavigationLink {
-                    FileViewer(item: item)
-                } label: {
-                    rowContent
-                }
-            }
-        }
-    }
-
-    private var rowContent: some View {
-        let isSelected = selectedItems.contains(item.id)
-        return HStack(spacing: 12) {
-            if selectionMode {
-                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(isSelected ? AppTheme.colors.accent : AppTheme.colors.secondaryText)
-            }
-            VaultThumbnailView(item: item, size: 52)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.originalName)
-                    .font(AppTheme.fonts.body)
-                Text(item.category ?? "Unsorted")
-                    .font(AppTheme.fonts.caption)
-                    .foregroundStyle(AppTheme.colors.secondaryText)
-            }
-            Spacer()
-            if isPinned {
-                Image(systemName: "pin.fill")
-                    .foregroundStyle(.orange)
-            }
-        }
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isSelected && selectionMode ? AppTheme.colors.accent.opacity(0.12) : Color.clear)
-        )
-        .contentShape(Rectangle())
-    }
-
-    private func toggleSelection() {
-        if selectedItems.contains(item.id) {
-            selectedItems.remove(item.id)
-        } else {
-            selectedItems.insert(item.id)
-        }
-    }
+    let urls: [URL]
+    var id: String { urls.map(\.path).joined(separator: "\n") }
 }

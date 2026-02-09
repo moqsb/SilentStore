@@ -196,14 +196,34 @@ final class VaultStore: ObservableObject {
         try context.save()
         try loadItems()
     }
+    
+    func renameItem(id: UUID, newName: String) throws {
+        let fetch = NSFetchRequest<VaultEntity>(entityName: "VaultEntity")
+        fetch.predicate = NSPredicate(format: "id == %@", id as CVarArg)
+        let matches = try context.fetch(fetch)
+        guard let entity = matches.first else { return }
+        entity.originalName = newName
+        try context.save()
+        try loadItems()
+        objectWillChange.send()
+    }
 
     func togglePin(id: UUID) {
-        if pinnedIDs.contains(id) {
+        let wasPinned = pinnedIDs.contains(id)
+        if wasPinned {
             pinnedIDs.remove(id)
         } else {
             pinnedIDs.insert(id)
         }
         savePinned()
+        
+        // Learn from pinning behavior
+        if let item = items.first(where: { $0.id == id }) {
+            Task { @MainActor in
+                AILearningManager.shared.learnFromPin(item: item, isPinned: !wasPinned)
+            }
+        }
+        
         objectWillChange.send()
     }
 
@@ -263,6 +283,19 @@ final class VaultStore: ObservableObject {
         var map = recentMap()
         map[id.uuidString] = Date().timeIntervalSince1970
         UserDefaults.standard.set(map, forKey: recentsKey)
+        
+        // Track open count for AI suggestions
+        let openCountKey = "openCount_\(id.uuidString)"
+        let currentCount = UserDefaults.standard.integer(forKey: openCountKey)
+        UserDefaults.standard.set(currentCount + 1, forKey: openCountKey)
+        
+        // Learn from user behavior
+        if let item = items.first(where: { $0.id == id }) {
+            Task { @MainActor in
+                AILearningManager.shared.learnFromFileOpen(item: item, category: item.category)
+            }
+        }
+        
         objectWillChange.send()
     }
 

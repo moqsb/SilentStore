@@ -10,40 +10,49 @@ struct OnboardingView: View {
     @State private var isConfirming = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            TabView {
-                OnboardingPage(
-                    icon: "lock.shield.fill",
-                    title: "Your Private Vault",
-                    message: "All files are encrypted locally and protected by Face ID and your app passcode."
-                )
-                OnboardingPage(
-                    icon: "tray.and.arrow.down.fill",
-                    title: "Import in Seconds",
-                    message: "Bring photos, videos, and documents into your vault with one tap."
-                )
-                OnboardingPage(
-                    icon: "folder.fill.badge.plus",
-                    title: "Organize with Folders",
-                    message: "Create folders and move items to keep everything in order."
-                )
-            }
-            .tabViewStyle(.page(indexDisplayMode: .always))
+        ZStack {
+            AppTheme.gradients.background.ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                TabView {
+                    OnboardingPage(
+                        icon: "lock.shield.fill",
+                        title: "Your Private Vault",
+                        message: "All files are encrypted locally and protected by your secure passcode."
+                    )
+                    OnboardingPage(
+                        icon: "tray.and.arrow.down.fill",
+                        title: "Import in Seconds",
+                        message: "Bring photos, videos, and documents into your vault with one tap."
+                    )
+                    OnboardingPage(
+                        icon: "folder.fill.badge.plus",
+                        title: "Organize with Folders",
+                        message: "Create folders and move items to keep everything in order."
+                    )
+                }
+                .tabViewStyle(.page(indexDisplayMode: .always))
+                .padding(.top, 40)
 
-            passcodeSection
+                passcodeSection
+                    .padding(.horizontal, 24)
+                    .padding(.top, 20)
 
-            Button {
-                HapticFeedback.play(.success)
-                didOnboard = true
-            } label: {
-                Text("Get Started")
+                Button {
+                    HapticFeedback.play(.success)
+                    didOnboard = true
+                } label: {
+                    Text("Get Started")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                }
+                .buttonStyle(AppTheme.buttons.primary)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 40)
+                .disabled(!hasPasscode)
             }
-            .buttonStyle(AppTheme.buttons.primary)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 28)
-            .disabled(!hasPasscode)
         }
-        .background(AppTheme.gradients.background.ignoresSafeArea())
         .onAppear {
             hasPasscode = KeyManager.shared.hasPasscode()
         }
@@ -127,30 +136,52 @@ private struct OnboardingPage: View {
     let message: String
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 32) {
             Spacer()
+            
             ZStack {
                 Circle()
-                    .fill(AppTheme.colors.cardBackground)
-                    .frame(width: 96, height: 96)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                AppTheme.colors.accent.opacity(0.2),
+                                AppTheme.colors.accent.opacity(0.1)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 120, height: 120)
                     .overlay(
                         Circle()
-                            .stroke(AppTheme.colors.cardBorder, lineWidth: 1)
+                            .stroke(
+                                AppTheme.gradients.accent,
+                                lineWidth: 2
+                            )
                     )
+                    .shadow(color: AppTheme.colors.accent.opacity(0.3), radius: 20, x: 0, y: 10)
+                
                 Image(systemName: icon)
-                    .font(.system(size: 38, weight: .semibold))
-                    .foregroundStyle(AppTheme.colors.accent)
+                    .font(.system(size: 48, weight: .semibold))
+                    .foregroundStyle(AppTheme.gradients.accent)
             }
-            Text(title)
-                .font(AppTheme.fonts.title)
-                .multilineTextAlignment(.center)
-            Text(message)
-                .font(AppTheme.fonts.body)
-                .foregroundStyle(AppTheme.colors.secondaryText)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+            
+            VStack(spacing: 12) {
+                Text(title)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                
+                Text(message)
+                    .font(.system(size: 16, weight: .regular, design: .rounded))
+                    .foregroundStyle(AppTheme.colors.secondaryText)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(4)
+                    .padding(.horizontal, 40)
+            }
+            
             Spacer()
         }
-        .padding(.top, 24)
+        .padding(.top, 60)
     }
 }

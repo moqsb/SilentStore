@@ -7,9 +7,9 @@ struct ContentView: View {
     @StateObject private var permissionsManager = PermissionsManager()
     @StateObject private var vaultStore: VaultStore
     @State private var showPermissions = false
-    @AppStorage("faceIdEnabled") private var faceIdEnabled = true
     @AppStorage("didOnboard") private var didOnboard = false
     @AppStorage("appearanceMode") private var appearanceMode = "system"
+    @AppStorage("faceIdEnabled") private var faceIdEnabled = false
     @State private var isUnlocking = false
     @State private var passcode = ""
     @State private var passcodeError: String?
@@ -32,61 +32,20 @@ struct ContentView: View {
             }
 
             if shouldHideContent {
-                AppTheme.gradients.background
-                    .ignoresSafeArea()
-                VStack(spacing: 16) {
-                    ZStack {
-                        Circle()
-                            .fill(AppTheme.colors.cardBackground)
-                            .frame(width: 64, height: 64)
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(AppTheme.colors.accent)
-                    }
-                    Text("SilentStore")
-                        .font(AppTheme.fonts.title)
-                        .foregroundStyle(AppTheme.colors.primaryText)
-                    if hasPasscode {
-                        Text(NSLocalizedString("Enter Passcode", comment: ""))
-                            .font(AppTheme.fonts.subtitle)
-                            .foregroundStyle(AppTheme.colors.secondaryText)
-                            .padding(.top, 8)
-                        if let passcodeError {
-                            Text(passcodeError)
-                                .font(AppTheme.fonts.caption)
-                                .foregroundStyle(.red)
-                                .padding(.top, 4)
+                LockScreenView(
+                    passcode: $passcode,
+                    passcodeError: $passcodeError,
+                    hasPasscode: hasPasscode,
+                    faceIdEnabled: faceIdEnabled,
+                    onUnlock: { Task { await unlockWithPasscode() } },
+                    onBiometricUnlock: { Task { await unlockWithBiometrics() } }
+                )
+                .onAppear {
+                    // Auto-trigger Face ID if enabled when lock screen appears
+                    if faceIdEnabled && !isUnlocking && !isPasscodeUnlocking {
+                        Task {
+                            await unlockWithBiometrics()
                         }
-                        PasscodeEntryView(passcode: $passcode, length: 6) {
-                            Task { await unlockWithPasscode() }
-                        }
-                        .padding(.top, 20)
-                        if faceIdEnabled {
-                            Button {
-                                HapticFeedback.play(.medium)
-                                Task { await unlockWithBiometrics() }
-                            } label: {
-                                Image(systemName: "faceid")
-                                    .font(.system(size: 36, weight: .light))
-                                    .foregroundStyle(AppTheme.colors.accent)
-                                    .frame(width: 70, height: 70)
-                                    .background(
-                                        Circle()
-                                            .fill(AppTheme.colors.surface.opacity(0.4))
-                                            .overlay(
-                                                Circle()
-                                                    .stroke(AppTheme.colors.accent.opacity(0.3), lineWidth: 1)
-                                            )
-                                    )
-                            }
-                            .buttonStyle(InteractiveButtonStyle(hapticStyle: .medium))
-                            .padding(.top, 32)
-                        }
-                    } else {
-                        Button("Unlock") {
-                            Task { await unlockIfNeeded() }
-                        }
-                        .buttonStyle(AppTheme.buttons.primary)
                     }
                 }
             }
@@ -99,6 +58,7 @@ struct ContentView: View {
         .onAppear {
             showPermissions = permissionsManager.shouldShowPermissionsSheet
             hasPasscode = KeyManager.shared.hasPasscode()
+            HapticFeedback.prepareAll()
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -106,18 +66,26 @@ struct ContentView: View {
                 authManager.lock()
                 KeyManager.shared.clearMasterKeyFromMemory()
                 vaultStore.markLocked()
+                // Save locked state
+                UserDefaults.standard.set(true, forKey: "isLocked")
             case .active:
                 hasPasscode = KeyManager.shared.hasPasscode()
-                if didOnboard {
-                    Task { await unlockIfNeeded() }
+                // Check if app was locked and should auto-unlock with Face ID
+                let wasLocked = UserDefaults.standard.bool(forKey: "isLocked")
+                if wasLocked && faceIdEnabled && shouldHideContent {
+                    // Small delay to ensure lock screen is visible
+                    Task {
+                        try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                        await unlockWithBiometrics()
+                    }
                 }
             default:
                 break
             }
         }
         .onChange(of: didOnboard) { _, newValue in
-            if newValue && scenePhase == .active {
-                Task { await unlockIfNeeded() }
+            if newValue {
+                hasPasscode = KeyManager.shared.hasPasscode()
             }
         }
     }
@@ -138,37 +106,6 @@ struct ContentView: View {
         }
     }
 
-    // Perform biometric or passcode unlock before loading data.
-    private func unlockIfNeeded() async {
-        guard faceIdEnabled else { return }
-        guard !isUnlocking else { return }
-        isUnlocking = true
-        defer { isUnlocking = false }
-        let success = await authManager.authenticateIfNeeded(useBiometrics: faceIdEnabled)
-        guard success else { return }
-        // Small delay to ensure context is properly set in KeyManager
-        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-        await vaultStore.prepareIfNeeded()
-    }
-    
-    // Unlock with biometrics when button is tapped.
-    private func unlockWithBiometrics() async {
-        guard faceIdEnabled else { return }
-        guard !isUnlocking else { return }
-        isUnlocking = true
-        defer { isUnlocking = false }
-        // Force biometric authentication directly
-        let success = await authManager.authenticate(useBiometrics: true)
-        if success {
-            HapticFeedback.play(.success)
-            // Small delay to ensure context is properly set
-            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-            await vaultStore.prepareIfNeeded()
-        } else {
-            HapticFeedback.play(.warning)
-        }
-    }
-
     // Unlock with app passcode and load data.
     private func unlockWithPasscode() async {
         guard !isPasscodeUnlocking else { return }
@@ -180,11 +117,32 @@ struct ContentView: View {
             HapticFeedback.play(.success)
             passcodeError = nil
             passcode = ""
+            // Clear locked state
+            UserDefaults.standard.set(false, forKey: "isLocked")
             await vaultStore.prepareIfNeeded()
         } else {
             HapticFeedback.play(.error)
             passcodeError = NSLocalizedString("Incorrect passcode.", comment: "")
             passcode = ""
+        }
+    }
+    
+    // Unlock with biometrics when button is tapped or auto-triggered (only if enabled)
+    private func unlockWithBiometrics() async {
+        guard faceIdEnabled else { return }
+        guard !isUnlocking else { return }
+        isUnlocking = true
+        defer { isUnlocking = false }
+        let success = await authManager.authenticate(useBiometrics: true)
+        if success {
+            HapticFeedback.play(.success)
+            passcodeError = nil
+            passcode = ""
+            // Clear locked state
+            UserDefaults.standard.set(false, forKey: "isLocked")
+            await vaultStore.prepareIfNeeded()
+        } else {
+            HapticFeedback.play(.warning)
         }
     }
 }

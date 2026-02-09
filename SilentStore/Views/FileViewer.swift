@@ -3,41 +3,56 @@ import AVKit
 import QuickLook
 
 struct FileViewer: View {
-    // Media and document preview screen.
     let item: VaultItem
     @EnvironmentObject private var vaultStore: VaultStore
-    @State private var data: Data?
-    @State private var tempShareURL: URL?
-    @State private var archiveURL: URL?
-    @State private var showInfo = false
-    @State private var showDeleteAlert = false
-    @State private var shareItem: ShareItem?
     @Environment(\.dismiss) private var dismiss
+    
     @State private var isLoading = true
+    @State private var data: Data?
     @State private var mediaItems: [VaultItem] = []
     @State private var selectedMediaID: UUID?
     @State private var showChrome = true
+    @State private var showInfo = false
+    @State private var showDeleteAlert = false
+    @State private var shareItem: ShareItem?
+    @State private var tempShareURL: URL?
+    @State private var archiveURL: URL?
+    
+    // Video player state
     @State private var currentPlayer: AVPlayer?
-    @State private var isPlaying = true
+    @State private var isPlaying = false
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
     @State private var isScrubbing = false
     @State private var timeObserver: Any?
     @State private var observerPlayer: AVPlayer?
     @State private var endObserver: NSObjectProtocol?
+    @State private var chromeTimer: Task<Void, Never>?
     @State private var wasPlayingBeforeScrub = false
-    @State private var dragOffset: CGFloat = 0
-
+    
+    private var isMediaItem: Bool {
+        item.isImage || item.isVideo
+    }
+    
+    private var currentItem: VaultItem {
+        if let selectedMediaID,
+           let found = mediaItems.first(where: { $0.id == selectedMediaID }) {
+            return found
+        }
+        return item
+    }
+    
     var body: some View {
-        VStack {
+        Group {
             if isLoading {
                 ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if isMediaItem {
-                mediaBrowser
-            } else if let data {
+                mediaBrowserView
+            } else if let data = data {
                 contentView(for: data)
             } else {
-                Text("Unable to load file.")
+                errorView
             }
         }
         .navigationTitle(currentItem.originalName)
@@ -48,7 +63,7 @@ struct FileViewer: View {
             if !isMediaItem {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     Button {
-                        Task { await prepareShare(for: currentItem) }
+                        Task { await prepareShare() }
                     } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
@@ -87,33 +102,109 @@ struct FileViewer: View {
         }
         .task {
             await loadData()
+            // Mark as opened permanently when viewed from Recents
+            let key = "recentsOpened_\(item.id.uuidString)"
+            UserDefaults.standard.set(true, forKey: key)
         }
         .onDisappear {
-            if let tempShareURL {
-                try? FileManager.default.removeItem(at: tempShareURL)
-            }
-            if let archiveURL {
-                try? FileManager.default.removeItem(at: archiveURL)
-                self.archiveURL = nil
-            }
-            removeTimeObserver()
-            removeEndObserver()
+            cleanup()
+        }
+        .onChange(of: selectedMediaID) { _, newID in
+            switchMedia(to: newID)
         }
         .onChange(of: currentPlayer) { _, newPlayer in
             setupTimeObserver(for: newPlayer)
             setupEndObserver(for: newPlayer)
         }
-        .onChange(of: selectedMediaID) { _, _ in
-            currentPlayer?.pause()
-            currentPlayer = nil
-            removeTimeObserver()
-            removeEndObserver()
-            currentTime = 0
-            duration = 0
-            isPlaying = false
+    }
+    
+    // MARK: - Media Browser View
+    
+    private var mediaBrowserView: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.ignoresSafeArea()
+                
+                if mediaItems.isEmpty {
+                    ProgressView()
+                        .tint(.white)
+                } else {
+                    TabView(selection: $selectedMediaID) {
+                        ForEach(mediaItems) { media in
+                            MediaItemView(
+                                item: media,
+                                geometry: geometry,
+                                onPlayerReady: { player in
+                                    if media.id == selectedMediaID {
+                                        currentPlayer = player
+                                        if let player {
+                                            isPlaying = player.timeControlStatus == .playing
+                                        }
+                                    }
+                                },
+                                isPlaying: $isPlaying,
+                                showChrome: $showChrome
+                            )
+                            .tag(media.id as UUID?)
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .disabled(true)
+                    
+                    // Navigation buttons
+                    if mediaItems.count > 1 {
+                        HStack {
+                            Button {
+                                navigatePrevious()
+                            } label: {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 24, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 50, height: 50)
+                                    .background(Circle().fill(Color.black.opacity(0.5)))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.leading, 20)
+                            
+                            Spacer()
+                            
+                            Button {
+                                navigateNext()
+                            } label: {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 24, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 50, height: 50)
+                                    .background(Circle().fill(Color.black.opacity(0.5)))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 20)
+                        }
+                        .allowsHitTesting(showChrome)
+                        .opacity(showChrome ? 1 : 0)
+                        .animation(.easeInOut(duration: 0.2), value: showChrome)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                toggleChrome()
+            }
+            .safeAreaInset(edge: .top) {
+                if showChrome {
+                    mediaTopBar
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if showChrome {
+                    mediaBottomBar
+                }
+            }
         }
     }
-
+    
+    // MARK: - Content View
+    
     @ViewBuilder
     private func contentView(for data: Data) -> some View {
         if currentItem.mimeType.hasPrefix("text/"), let text = String(data: data, encoding: .utf8) {
@@ -124,235 +215,263 @@ struct FileViewer: View {
                     .padding()
             }
         } else if isArchive {
-            if let archiveURL {
-                ArchivePreviewView(url: archiveURL)
-            } else {
-                archiveInfoView
-            }
+            archiveInfoView
         } else {
-            VStack(spacing: 12) {
-                Image(systemName: "doc")
-                    .font(.system(size: 40))
-                    .foregroundStyle(AppTheme.colors.accent)
-                Text("Preview not available")
-                    .font(AppTheme.fonts.body)
-                Text("\(currentItem.mimeType) • \(ByteCountFormatter.string(fromByteCount: currentItem.size, countStyle: .file))")
-                    .font(AppTheme.fonts.caption)
-                    .foregroundStyle(AppTheme.colors.secondaryText)
-            }
+            documentPreviewView
         }
     }
-
-    private func loadData() async {
-        do {
-            vaultStore.recordOpened(id: item.id)
-            if item.isImage || item.isVideo {
-                mediaItems = vaultStore.items
-                    .filter { ($0.isImage || $0.isVideo) && $0.folder == item.folder }
-                    .sorted { $0.createdAt > $1.createdAt }
-                selectedMediaID = item.id
-            } else {
-                let decrypted = try await vaultStore.decryptItemData(item)
-                data = decrypted
-                if isArchive {
-                    archiveURL = try writeTempArchive(data: decrypted)
-                }
-            }
-        } catch {
-            data = nil
+    
+    private var errorView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 40))
+                .foregroundStyle(AppTheme.colors.error)
+            Text("Unable to load file")
+                .font(AppTheme.fonts.body)
+                .foregroundStyle(AppTheme.colors.primaryText)
         }
-        isLoading = false
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
-    private func writeTempShare(data: Data, for item: VaultItem) throws -> URL {
-        let ext: String
-        if item.mimeType.contains("png") {
-            ext = "png"
-        } else if item.mimeType.contains("jpeg") || item.mimeType.contains("jpg") {
-            ext = "jpg"
-        } else if item.mimeType.contains("pdf") {
-            ext = "pdf"
-        } else if item.isVideo {
-            ext = "mp4"
-        } else if let originalExt = item.originalName.split(separator: ".").last {
-            ext = String(originalExt)
-        } else {
-            ext = "dat"
+    
+    private var documentPreviewView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "doc")
+                .font(.system(size: 40))
+                .foregroundStyle(AppTheme.colors.accent)
+            Text("Preview not available")
+                .font(AppTheme.fonts.body)
+            Text("\(currentItem.mimeType) • \(ByteCountFormatter.string(fromByteCount: currentItem.size, countStyle: .file))")
+                .font(AppTheme.fonts.caption)
+                .foregroundStyle(AppTheme.colors.secondaryText)
         }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".\(ext)")
-        try data.write(to: url, options: [.atomic])
-        return url
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
-    private func writeTempArchive(data: Data) throws -> URL {
-        let ext = currentItem.originalName.split(separator: ".").last.map(String.init) ?? "zip"
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".\(ext)")
-        try data.write(to: url, options: [.atomic])
-        return url
-    }
-
-    private var isMediaItem: Bool {
-        item.isImage || item.isVideo
-    }
-
-    private var isArchive: Bool {
-        let lower = currentItem.mimeType.lowercased()
-        if lower.contains("zip") || lower.contains("rar") { return true }
-        let ext = currentItem.originalName.split(separator: ".").last?.lowercased() ?? ""
-        return ["zip", "rar", "7z"].contains(ext)
-    }
-
-    private var currentItem: VaultItem {
-        if let selectedMediaID,
-           let item = mediaItems.first(where: { $0.id == selectedMediaID }) {
-            return item
+    
+    private var archiveInfoView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Archive")
+                .font(AppTheme.fonts.title)
+            Text("\(currentItem.originalName)")
+                .font(AppTheme.fonts.body)
+                .foregroundStyle(AppTheme.colors.secondaryText)
+            Text("\(ByteCountFormatter.string(fromByteCount: currentItem.size, countStyle: .file))")
+                .font(AppTheme.fonts.caption)
         }
-        return item
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
-
-    private var mediaBrowser: some View {
-        ZStack {
-            TabView(selection: $selectedMediaID) {
-                ForEach(mediaItems) { media in
-                    MediaPageView(
-                        item: media,
-                        onPlayerReady: { player in
-                            currentPlayer = player
-                            if let player {
-                                isPlaying = player.timeControlStatus == .playing
-                            } else {
-                                isPlaying = false
-                            }
-                        },
-                        isPlaying: $isPlaying,
-                        showChrome: $showChrome
-                    ) {
-                        toggleChrome()
-                    }
-                    .tag(media.id as UUID?)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .animation(.smooth(duration: 0.3), value: selectedMediaID)
-            .background(Color.black)
-        }
-        .offset(y: dragOffset)
-        .scaleEffect(max(0.96, 1 - (dragOffset / 1200)))
-        .opacity(max(0.6, 1 - (dragOffset / 800)))
-        .gesture(
-            DragGesture(minimumDistance: 10)
-                .onChanged { value in
-                    // Smooth drag from anywhere - prioritize vertical movement
-                    let verticalMovement = abs(value.translation.height)
-                    let horizontalMovement = abs(value.translation.width)
-                    
-                    // Allow smooth vertical drags from anywhere
-                    if value.translation.height > 0 {
-                        // If vertical movement is significant or dominant
-                        if verticalMovement > 20 || verticalMovement > horizontalMovement * 1.2 {
-                            dragOffset = value.translation.height
-                        }
-                    }
-                }
-                .onEnded { value in
-                    let threshold: CGFloat = 80
-                    let verticalMovement = abs(value.translation.height)
-                    let horizontalMovement = abs(value.translation.width)
-                    let velocity = value.predictedEndTranslation.height - value.translation.height
-                    
-                    // Dismiss if dragged down significantly or with high velocity
-                    if (value.translation.height > threshold && verticalMovement > horizontalMovement) || velocity > 500 {
-                        let screenHeight = UIScreen.main.bounds.height
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            dragOffset = screenHeight
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            dismiss()
-                        }
-                    } else {
-                        // Smooth spring back
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
-                            dragOffset = 0
-                        }
-                    }
-                }
-        )
-        .safeAreaInset(edge: .top) {
-            if showChrome {
-                mediaTopBar
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            if showChrome {
-                mediaBottomBar
-            }
-        }
-    }
-
+    
+    // MARK: - Media Top Bar
+    
     private var mediaTopBar: some View {
-        HStack(spacing: 14) {
+        HStack {
             Button {
+                HapticFeedback.play(.light)
+                pauseCurrentVideo()
                 dismiss()
             } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(Color.white.opacity(0.15)))
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(currentItem.originalName)
-                    .font(AppTheme.fonts.body)
-                    .lineLimit(1)
-                Text(formattedDate)
-                    .font(AppTheme.fonts.caption)
-                    .foregroundStyle(AppTheme.colors.secondaryText)
-                    .lineLimit(1)
-            }
+            .buttonStyle(.plain)
+            
             Spacer()
-            Button {
-                showInfo = true
-            } label: {
-                Image(systemName: "ellipsis")
+            
+            if mediaItems.count > 1 {
+                Text("\(currentIndex + 1) / \(mediaItems.count)")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
+        .padding()
+        .background(
+            LinearGradient(
+                colors: [Color.black.opacity(0.9), Color.black.opacity(0.5), Color.clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
-
+    
+    // MARK: - Media Bottom Bar
+    
     private var mediaBottomBar: some View {
-        VStack(spacing: 8) {
-            HStack {
+        VStack(spacing: 0) {
+            if currentItem.isVideo {
+                videoControls
+            }
+            
+            HStack(spacing: 24) {
+                // Play/Pause
+                if currentItem.isVideo {
+                    Button {
+                        HapticFeedback.play(.light)
+                        togglePlayback()
+                    } label: {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 50, height: 50)
+                            .background(Circle().fill(Color.white.opacity(0.15)))
+                    }
+                    .buttonStyle(InteractiveButtonStyle(hapticStyle: .light))
+                }
+                
+                // Share
                 Button {
                     HapticFeedback.play(.light)
-                    Task { await prepareShare(for: currentItem) }
+                    Task { await prepareShare() }
                 } label: {
                     Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 50, height: 50)
+                        .background(Circle().fill(Color.white.opacity(0.15)))
                 }
                 .buttonStyle(InteractiveButtonStyle(hapticStyle: .light))
-                Spacer()
-                Spacer()
+                
+                // Delete
                 Button(role: .destructive) {
                     HapticFeedback.play(.warning)
                     showDeleteAlert = true
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(.red)
+                        .frame(width: 50, height: 50)
+                        .background(Circle().fill(Color.red.opacity(0.15)))
                 }
                 .buttonStyle(InteractiveButtonStyle(hapticStyle: .warning))
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 30)
-            .padding(.top, 8)
-            if currentItem.isVideo {
-                videoScrubber
-                    .padding(.bottom, 4)
-            }
-
-            mediaThumbStrip
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
         }
-        .background(.ultraThinMaterial)
+        .background(
+            LinearGradient(
+                colors: [Color.clear, Color.black.opacity(0.5), Color.black.opacity(0.9)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
-
+    
+    private var videoControls: some View {
+        VStack(spacing: 12) {
+            // Time labels
+            HStack {
+                Text(timeString(currentTime))
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.9))
+                Spacer()
+                Text(timeString(duration))
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .padding(.horizontal, 20)
+            
+            // Progress bar with skip buttons
+            HStack(spacing: 12) {
+                Button {
+                    HapticFeedback.play(.light)
+                    skipBackward(seconds: 5)
+                } label: {
+                    Image(systemName: "gobackward.5")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.2))
+                            .frame(height: 4)
+                        
+                        Rectangle()
+                            .fill(AppTheme.colors.accent)
+                            .frame(width: geometry.size.width * (duration > 0 ? currentTime / duration : 0), height: 4)
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                if !isScrubbing {
+                                    isScrubbing = true
+                                    wasPlayingBeforeScrub = isPlaying
+                                    pauseCurrentVideo()
+                                }
+                                let progress = max(0, min(1, value.location.x / geometry.size.width))
+                                currentTime = progress * duration
+                            }
+                            .onEnded { _ in
+                                seekToCurrentTime()
+                                isScrubbing = false
+                                if wasPlayingBeforeScrub {
+                                    playCurrentVideo()
+                                }
+                            }
+                    )
+                }
+                .frame(height: 44)
+                
+                Button {
+                    HapticFeedback.play(.light)
+                    skipForward(seconds: 5)
+                } label: {
+                    Image(systemName: "goforward.5")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.bottom, 12)
+    }
+    
+    // MARK: - Data Loading
+    
+    private func loadData() async {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            vaultStore.recordOpened(id: item.id)
+            
+            if item.isImage || item.isVideo {
+                // Load media items
+                await MainActor.run {
+                    mediaItems = vaultStore.items
+                        .filter { ($0.isImage || $0.isVideo) && $0.folder == item.folder }
+                        .sorted { $0.createdAt > $1.createdAt }
+                    selectedMediaID = item.id
+                }
+            } else {
+                // Load document data
+                let decrypted = try await vaultStore.decryptItemData(item)
+                await MainActor.run {
+                    data = decrypted
+                    if isArchive {
+                        do {
+                            archiveURL = try writeTempArchive(data: decrypted)
+                        } catch {
+                            print("Failed to write archive: \(error)")
+                        }
+                    }
+                }
+            }
+        } catch {
+            print("Failed to load data: \(error)")
+            await MainActor.run {
+                data = nil
+            }
+        }
+    }
+    
+    // MARK: - Media Navigation
+    
     private var currentIndex: Int {
         guard let selectedMediaID,
               let index = mediaItems.firstIndex(where: { $0.id == selectedMediaID }) else {
@@ -360,131 +479,97 @@ struct FileViewer: View {
         }
         return index
     }
-
-    private var mediaThumbStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(mediaItems) { media in
-                    Button {
-                        selectedMediaID = media.id
-                    } label: {
-                        VaultThumbnailView(item: media, size: 46)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(isSelected(media) ? AppTheme.colors.accent : Color.clear, lineWidth: 2)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 10)
+    
+    private func navigatePrevious() {
+        guard !mediaItems.isEmpty else { return }
+        let previousIdx = currentIndex > 0 ? currentIndex - 1 : mediaItems.count - 1
+        HapticFeedback.play(.light)
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            selectedMediaID = mediaItems[previousIdx].id
         }
     }
-
-    private func isSelected(_ media: VaultItem) -> Bool {
-        media.id == selectedMediaID
+    
+    private func navigateNext() {
+        guard !mediaItems.isEmpty else { return }
+        let nextIdx = currentIndex < mediaItems.count - 1 ? currentIndex + 1 : 0
+        HapticFeedback.play(.light)
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            selectedMediaID = mediaItems[nextIdx].id
+        }
     }
-
+    
+    private func switchMedia(to newID: UUID?) {
+        pauseCurrentVideo()
+        currentPlayer?.pause()
+        currentPlayer = nil
+        removeTimeObserver()
+        removeEndObserver()
+        currentTime = 0
+        duration = 0
+        isPlaying = false
+    }
+    
+    // MARK: - Chrome Controls
+    
     private func toggleChrome() {
+        cancelChromeTimer()
         withAnimation(.easeInOut(duration: 0.25)) {
             showChrome.toggle()
         }
-        // Ensure time observer continues working after chrome toggle
-        if showChrome, let player = currentPlayer {
-            setupTimeObserver(for: player)
+        if showChrome {
+            startChromeTimer()
         }
     }
-
+    
+    private func startChromeTimer() {
+        chromeTimer?.cancel()
+        chromeTimer = Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if !Task.isCancelled {
+                await MainActor.run {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        showChrome = false
+                    }
+                }
+            }
+        }
+    }
+    
+    private func cancelChromeTimer() {
+        chromeTimer?.cancel()
+        chromeTimer = nil
+    }
+    
+    // MARK: - Video Playback
+    
     private func togglePlayback() {
         guard let player = currentPlayer else { return }
-        if player.timeControlStatus == .playing {
-            player.pause()
-            isPlaying = false
+        if isPlaying {
+            pauseCurrentVideo()
         } else {
-            if duration > 0, currentTime >= max(duration - 0.2, 0) {
-                player.seek(to: .zero)
+            if currentTime >= duration - 0.1 {
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
                 currentTime = 0
             }
-            player.play()
-            isPlaying = true
+            playCurrentVideo()
         }
     }
-
-    private var videoScrubber: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 12) {
-                // Skip backward 5 seconds
-                Button {
-                    HapticFeedback.play(.light)
-                    skipBackward(seconds: 5)
-                } label: {
-                    Image(systemName: "gobackward.5")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .background(
-                            Circle()
-                                .fill(.white.opacity(0.2))
-                        )
-                }
-                .buttonStyle(InteractiveButtonStyle(hapticStyle: .light))
-                
-                Slider(
-                    value: Binding(
-                        get: { currentTime },
-                        set: { currentTime = $0 }
-                    ),
-                    in: 0...max(duration, 0.1),
-                    onEditingChanged: { editing in
-                        isScrubbing = editing
-                        if editing {
-                            wasPlayingBeforeScrub = isPlaying
-                            currentPlayer?.pause()
-                            isPlaying = false
-                        } else {
-                            seekToCurrentTime()
-                            if wasPlayingBeforeScrub {
-                                currentPlayer?.play()
-                                isPlaying = true
-                            }
-                        }
-                    }
-                )
-                .tint(.white)
-                
-                // Skip forward 5 seconds
-                Button {
-                    HapticFeedback.play(.light)
-                    skipForward(seconds: 5)
-                } label: {
-                    Image(systemName: "goforward.5")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .background(
-                            Circle()
-                                .fill(.white.opacity(0.2))
-                        )
-                }
-                .buttonStyle(InteractiveButtonStyle(hapticStyle: .light))
-            }
-            HStack {
-                Text(timeString(currentTime))
-                Spacer()
-                Text(timeString(duration))
-            }
-            .font(AppTheme.fonts.caption)
-            .foregroundStyle(.white.opacity(0.8))
-        }
-        .padding(.horizontal, 20)
+    
+    private func playCurrentVideo() {
+        currentPlayer?.play()
+        isPlaying = true
+    }
+    
+    private func pauseCurrentVideo() {
+        currentPlayer?.pause()
+        isPlaying = false
     }
     
     private func skipBackward(seconds: Double) {
         guard let player = currentPlayer else { return }
         let newTime = max(0, currentTime - seconds)
         let time = CMTime(seconds: newTime, preferredTimescale: 600)
-        player.seek(to: time)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
         currentTime = newTime
     }
     
@@ -492,16 +577,18 @@ struct FileViewer: View {
         guard let player = currentPlayer else { return }
         let newTime = min(duration, currentTime + seconds)
         let time = CMTime(seconds: newTime, preferredTimescale: 600)
-        player.seek(to: time)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
         currentTime = newTime
     }
-
+    
     private func seekToCurrentTime() {
         guard let player = currentPlayer else { return }
         let time = CMTime(seconds: currentTime, preferredTimescale: 600)
-        player.seek(to: time)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
     }
-
+    
+    // MARK: - Time Observer
+    
     private func setupTimeObserver(for player: AVPlayer?) {
         removeTimeObserver()
         guard let player else {
@@ -514,7 +601,6 @@ struct FileViewer: View {
         let total = CMTimeGetSeconds(assetDuration)
         duration = total.isFinite ? total : 0
         
-        // Always update time observer regardless of showChrome state
         let isScrubbingRef = isScrubbing
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
@@ -536,7 +622,7 @@ struct FileViewer: View {
             }
         }
     }
-
+    
     private func removeTimeObserver() {
         if let timeObserver, let player = observerPlayer {
             player.removeTimeObserver(timeObserver)
@@ -544,7 +630,7 @@ struct FileViewer: View {
         timeObserver = nil
         observerPlayer = nil
     }
-
+    
     private func setupEndObserver(for player: AVPlayer?) {
         removeEndObserver()
         guard let player, let item = player.currentItem else { return }
@@ -552,160 +638,177 @@ struct FileViewer: View {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
-        ) { _ in
-            isPlaying = false
-            currentTime = duration
+        ) { [weak player] _ in
+            guard let player = player else { return }
+            Task { @MainActor in
+                isPlaying = false
+                currentTime = duration
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                currentTime = 0
+            }
         }
     }
-
+    
     private func removeEndObserver() {
         if let endObserver {
             NotificationCenter.default.removeObserver(endObserver)
         }
         endObserver = nil
     }
-
-    private func timeString(_ seconds: Double) -> String {
-        guard seconds.isFinite else { return "--:--" }
-        let int = Int(seconds)
-        let m = int / 60
-        let s = int % 60
-        return String(format: "%02d:%02d", m, s)
-    }
-
-    private var archiveInfoView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: "archivebox.fill")
-                    .foregroundStyle(AppTheme.colors.accent)
-                Text(NSLocalizedString("Archive", comment: ""))
-                    .font(AppTheme.fonts.subtitle)
-            }
-            Text(currentItem.originalName)
-                .font(AppTheme.fonts.body)
-            Text(ByteCountFormatter.string(fromByteCount: currentItem.size, countStyle: .file))
-                .font(AppTheme.fonts.caption)
-                .foregroundStyle(AppTheme.colors.secondaryText)
-            Text(NSLocalizedString("Archive preview is not available. Use Share to open in Files.", comment: ""))
-                .font(AppTheme.fonts.caption)
-                .foregroundStyle(AppTheme.colors.secondaryText)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var formattedDate: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter.string(from: currentItem.createdAt)
-    }
-
-
-    private func prepareShare(for item: VaultItem) async {
+    
+    // MARK: - Share
+    
+    private func prepareShare() async {
         do {
-            let decrypted = try await vaultStore.decryptItemData(item)
-            let url = try writeTempShare(data: decrypted, for: item)
+            let url = try await vaultStore.temporaryShareURL(for: currentItem)
             tempShareURL = url
             shareItem = ShareItem(url: url)
         } catch {
-            shareItem = nil
+            print("Failed to prepare share: \(error)")
         }
+    }
+    
+    // MARK: - Helpers
+    
+    private func timeString(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        let mins = total / 60
+        let secs = total % 60
+        return String(format: "%d:%02d", mins, secs)
+    }
+    
+    private func writeTempArchive(data: Data) throws -> URL {
+        let ext = currentItem.originalName.split(separator: ".").last.map(String.init) ?? "zip"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".\(ext)")
+        try data.write(to: url, options: [.atomic])
+        return url
+    }
+    
+    private var isArchive: Bool {
+        let lower = currentItem.mimeType.lowercased()
+        if lower.contains("zip") || lower.contains("rar") { return true }
+        let ext = currentItem.originalName.split(separator: ".").last?.lowercased() ?? ""
+        return ["zip", "rar", "7z"].contains(ext)
+    }
+    
+    private func cleanup() {
+        pauseCurrentVideo()
+        removeTimeObserver()
+        removeEndObserver()
+        currentPlayer = nil
+        cancelChromeTimer()
     }
 }
 
-private struct ShareItem: Identifiable {
-    let url: URL
-    var id: URL { url }
-}
+// MARK: - Media Item View
 
-private struct MediaPageView: View {
+private struct MediaItemView: View {
     let item: VaultItem
+    let geometry: GeometryProxy
     let onPlayerReady: (AVPlayer?) -> Void
     @Binding var isPlaying: Bool
     @Binding var showChrome: Bool
-    let onTap: () -> Void
     @EnvironmentObject private var vaultStore: VaultStore
+    
     @State private var data: Data?
     @State private var player: AVPlayer?
     @State private var tempVideoURL: URL?
     @State private var isLoading = true
-
+    
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            
             if isLoading {
-                ProgressView()
-                    .tint(.white)
-            } else if item.isImage, let data, let image = UIImage(data: data) {
+                VStack(spacing: 20) {
+                    ProgressView()
+                        .tint(.white)
+                        .scaleEffect(1.3)
+                    Text("Loading...")
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+            } else if item.isImage, let data = data, let image = UIImage(data: data) {
                 ZoomableImageView(image: image)
-                    .ignoresSafeArea(.container, edges: .bottom)
-            } else if item.isVideo, let player {
-                ZoomableVideoPlayer(player: player)
-                    .ignoresSafeArea(.container, edges: .bottom)
+                    .ignoresSafeArea(.container, edges: .all)
+            } else if item.isVideo, let player = player {
+                AVPlayerViewControllerRepresentable(player: player)
+                    .ignoresSafeArea(.container, edges: .all)
             } else {
-                Text("Preview not available")
-                    .foregroundStyle(.white)
-            }
-            if item.isVideo && showChrome {
-                Button {
-                    togglePlayback()
-                } label: {
-                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 68, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .shadow(color: .black.opacity(0.4), radius: 6, x: 0, y: 2)
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.white.opacity(0.6))
+                    Text("Preview not available")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.8))
                 }
             }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onTap()
         }
         .task(id: item.id) {
             await loadMedia()
         }
+        .onChange(of: isPlaying) { _, newValue in
+            if item.isVideo {
+                if newValue {
+                    player?.play()
+                } else {
+                    player?.pause()
+                }
+            }
+        }
         .onDisappear {
+            player?.pause()
+            player = nil
             if let tempVideoURL {
                 try? FileManager.default.removeItem(at: tempVideoURL)
             }
-            player?.pause()
-            onPlayerReady(nil)
-            isPlaying = false
         }
     }
-
+    
     private func loadMedia() async {
+        isLoading = true
+        data = nil
+        player = nil
+        
         do {
             let decrypted = try await vaultStore.decryptItemData(item)
-            data = decrypted
-            if item.isVideo {
-                tempVideoURL = try writeTempVideo(data: decrypted)
-                if let tempVideoURL {
-                    player = AVPlayer(url: tempVideoURL)
-                    onPlayerReady(player)
+            await MainActor.run {
+                data = decrypted
+                
+                if item.isVideo {
+                    do {
+                        tempVideoURL = try writeTempVideo(data: decrypted)
+                        if let tempVideoURL {
+                            player = AVPlayer(url: tempVideoURL)
+                            onPlayerReady(player)
+                        } else {
+                            onPlayerReady(nil)
+                        }
+                    } catch {
+                        print("Failed to write temp video: \(error)")
+                        onPlayerReady(nil)
+                    }
+                } else {
+                    onPlayerReady(nil)
                 }
-            } else {
-                onPlayerReady(nil)
+                
+                withAnimation(.easeIn(duration: 0.3)) {
+                    isLoading = false
+                }
             }
         } catch {
-            data = nil
-            onPlayerReady(nil)
-        }
-        isLoading = false
-    }
-
-    private func togglePlayback() {
-        guard let player else { return }
-        if player.timeControlStatus == .playing {
-            player.pause()
-            isPlaying = false
-        } else {
-            player.play()
-            isPlaying = true
+            print("Failed to decrypt media: \(error)")
+            await MainActor.run {
+                data = nil
+                onPlayerReady(nil)
+                withAnimation(.easeIn(duration: 0.3)) {
+                    isLoading = false
+                }
+            }
         }
     }
-
+    
     private func writeTempVideo(data: Data) throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
         try data.write(to: url, options: [.atomic])
@@ -713,78 +816,26 @@ private struct MediaPageView: View {
     }
 }
 
-private struct ZoomableVideoPlayer: View {
+// MARK: - AVPlayer View Controller Representable
+
+private struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
     let player: AVPlayer
-    @State private var scale: CGFloat = 1
-    @State private var lastScale: CGFloat = 1
-
-    var body: some View {
-        PlayerLayerView(player: player)
-            .scaleEffect(scale)
-            .gesture(
-                MagnificationGesture()
-                    .onChanged { value in
-                        let updated = lastScale * value
-                        scale = min(max(updated, 1), 3)
-                    }
-                    .onEnded { _ in
-                        lastScale = scale
-                    }
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
-    }
-}
-
-private struct PlayerLayerView: UIViewRepresentable {
-    let player: AVPlayer
-
-    func makeUIView(context: Context) -> PlayerView {
-        let view = PlayerView()
-        view.playerLayer.player = player
-        view.playerLayer.videoGravity = .resizeAspect
-        return view
-    }
-
-    func updateUIView(_ uiView: PlayerView, context: Context) {
-        uiView.playerLayer.player = player
-    }
-}
-
-private final class PlayerView: UIView {
-    override class var layerClass: AnyClass { AVPlayerLayer.self }
-    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-}
-
-private struct ArchivePreviewView: UIViewControllerRepresentable {
-    let url: URL
-
-    func makeUIViewController(context: Context) -> QLPreviewController {
-        let controller = QLPreviewController()
-        controller.dataSource = context.coordinator
+    
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.showsPlaybackControls = false
         return controller
     }
-
-    func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {
-        context.coordinator.url = url
-        uiViewController.reloadData()
+    
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        uiViewController.player = player
     }
+}
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(url: url)
-    }
+// MARK: - Share Item
 
-    final class Coordinator: NSObject, QLPreviewControllerDataSource {
-        var url: URL
-
-        init(url: URL) {
-            self.url = url
-        }
-
-        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
-
-        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
-            url as QLPreviewItem
-        }
-    }
+private struct ShareItem: Identifiable {
+    let url: URL
+    var id: URL { url }
 }

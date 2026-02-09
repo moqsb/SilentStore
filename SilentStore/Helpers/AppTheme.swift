@@ -1,18 +1,73 @@
 import SwiftUI
 
 enum AppTheme {
+    static var isLightMode: Bool {
+        let appearanceMode = UserDefaults.standard.string(forKey: "appearanceMode") ?? "system"
+        switch appearanceMode {
+        case "light":
+            return true
+        case "dark":
+            return false
+        default:
+            return UITraitCollection.current.userInterfaceStyle == .light
+        }
+    }
+    
     enum colors {
-        // Neon security colors - unified and safe feeling
-        static let accent = Color(red: 0.0, green: 0.8, blue: 1.0) // Cyan neon
-        static let accentSecondary = Color(red: 0.0, green: 0.9, blue: 0.7) // Green neon
-        static let accentGlow = Color(red: 0.0, green: 0.8, blue: 1.0).opacity(0.6)
+        // MEGA Official Colors - Exact match
+        // #1C9EBD - MEGA Teal/Cyan accent
+        static var accent: Color {
+            Color(red: 0.11, green: 0.62, blue: 0.74) // #1C9EBD
+        }
+        static var accentSecondary: Color {
+            Color(red: 0.08, green: 0.55, blue: 0.66) // Darker teal
+        }
+        static var accentLight: Color {
+            Color(red: 0.15, green: 0.70, blue: 0.82) // Lighter teal
+        }
+        static var accentGlow: Color {
+            Color(red: 0.11, green: 0.62, blue: 0.74).opacity(0.3)
+        }
         
-        static let background = Color(red: 0.05, green: 0.05, blue: 0.08) // Dark background
-        static let surface = Color(red: 0.08, green: 0.08, blue: 0.12) // Dark surface
-        static let cardBackground = Color(red: 0.12, green: 0.12, blue: 0.16) // Dark card
-        static let cardBorder = Color(red: 0.0, green: 0.8, blue: 1.0).opacity(0.3) // Neon border
-        static let primaryText = Color.white
-        static let secondaryText = Color(red: 0.7, green: 0.7, blue: 0.75)
+        // Background colors - adapt to light/dark mode
+        static var background: Color {
+            isLightMode ? Color(red: 0.98, green: 0.98, blue: 0.99) : Color(red: 0.027, green: 0.031, blue: 0.051) // #07080D
+        }
+        static var surface: Color {
+            isLightMode ? Color(red: 0.95, green: 0.95, blue: 0.96) : Color(red: 0.11, green: 0.13, blue: 0.16)
+        }
+        static var cardBackground: Color {
+            isLightMode ? Color.white : Color(red: 0.15, green: 0.17, blue: 0.20)
+        }
+        static var cardBorder: Color {
+            isLightMode ? Color(red: 0.11, green: 0.62, blue: 0.74).opacity(0.2) : Color(red: 0.11, green: 0.62, blue: 0.74).opacity(0.15)
+        }
+        
+        static var surfaceSecondary: Color {
+            isLightMode ? Color(red: 0.92, green: 0.92, blue: 0.93) : Color(red: 0.23, green: 0.30, blue: 0.38) // #3A4D62
+        }
+        
+        // Text colors - adapt to light/dark mode
+        static var primaryText: Color {
+            isLightMode ? Color(red: 0.1, green: 0.1, blue: 0.15) : Color.white
+        }
+        static var secondaryText: Color {
+            isLightMode ? Color(red: 0.4, green: 0.4, blue: 0.5) : Color(red: 0.68, green: 0.69, blue: 0.78) // #AEB0C7
+        }
+        static var tertiaryText: Color {
+            isLightMode ? Color(red: 0.5, green: 0.5, blue: 0.6) : Color(red: 0.56, green: 0.57, blue: 0.65)
+        }
+        
+        // Interactive colors - MEGA style
+        static var success: Color {
+            Color(red: 0.11, green: 0.62, blue: 0.74) // MEGA teal
+        }
+        static var warning: Color {
+            Color(red: 0.76, green: 0.40, blue: 0.21) // #C36736
+        }
+        static var error: Color {
+            Color(red: 0.90, green: 0.26, blue: 0.21) // Red
+        }
     }
 
     enum fonts {
@@ -28,27 +83,44 @@ enum AppTheme {
     }
 
     enum gradients {
-        static let background = LinearGradient(
-            colors: [
-                Color(red: 0.05, green: 0.05, blue: 0.08),
-                Color(red: 0.08, green: 0.08, blue: 0.12),
-                Color(red: 0.06, green: 0.06, blue: 0.10)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        // MEGA background gradient - adapt to light/dark mode
+        static var background: LinearGradient {
+            if isLightMode {
+                return LinearGradient(
+                    colors: [
+                        Color(red: 0.98, green: 0.98, blue: 0.99),
+                        Color(red: 0.96, green: 0.96, blue: 0.97),
+                        Color(red: 0.98, green: 0.98, blue: 0.99)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            } else {
+                return LinearGradient(
+                    colors: [
+                        Color(red: 0.027, green: 0.031, blue: 0.051), // #07080D
+                        Color(red: 0.05, green: 0.06, blue: 0.08),
+                        Color(red: 0.027, green: 0.031, blue: 0.051)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        }
+        // MEGA accent gradient
         static let accent = LinearGradient(
             colors: [
-                Color(red: 0.0, green: 0.9, blue: 1.0),
-                Color(red: 0.0, green: 0.8, blue: 1.0),
-                Color(red: 0.0, green: 0.7, blue: 0.9)
+                Color(red: 0.15, green: 0.70, blue: 0.82), // Lighter teal
+                Color(red: 0.11, green: 0.62, blue: 0.74), // #1C9EBD
+                Color(red: 0.08, green: 0.55, blue: 0.66)  // Darker teal
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
-        static let neonGlow = RadialGradient(
+        // MEGA glow effect
+        static let glow = RadialGradient(
             colors: [
-                colors.accent.opacity(0.4),
+                colors.accent.opacity(0.3),
                 colors.accent.opacity(0.1),
                 Color.clear
             ],
