@@ -476,6 +476,51 @@ private struct AboutView: View {
     }
 }
 
+// MARK: - Passcode Strength
+
+private enum PasscodeStrength {
+    struct RuleResult: Identifiable {
+        let id: String
+        let passed: Bool
+        var label: String { NSLocalizedString(id, comment: "") }
+    }
+    
+    static func check(_ code: String) -> [RuleResult] {
+        guard code.count == 6, code.allSatisfy({ $0.isNumber }) else {
+            return []
+        }
+        let digits = code.map { Int(String($0))! }
+        return [
+            RuleResult(id: "passcode_rule_not_sequential", passed: !isSequential(digits)),
+            RuleResult(id: "passcode_rule_not_repeated", passed: !isAllSame(digits)),
+            RuleResult(id: "passcode_rule_not_repeating_pair", passed: !isRepeatingPair(digits)),
+            RuleResult(id: "passcode_rule_not_common", passed: !isCommonWeak(code))
+        ]
+    }
+    
+    private static func isSequential(_ d: [Int]) -> Bool {
+        let up = (0..<5).allSatisfy { d[$0] + 1 == d[$0 + 1] }
+        let down = (0..<5).allSatisfy { d[$0] - 1 == d[$0 + 1] }
+        return up || down
+    }
+    
+    private static func isAllSame(_ d: [Int]) -> Bool {
+        d.allSatisfy { $0 == d[0] }
+    }
+    
+    private static func isRepeatingPair(_ d: [Int]) -> Bool {
+        if d[0] == d[2] && d[1] == d[3] && d[0] == d[4] && d[1] == d[5] { return true }
+        if d[0] == d[1] && d[2] == d[3] && d[4] == d[5] && d[0] == d[2] && d[0] == d[4] { return true }
+        if d[0] == d[2] && d[2] == d[4] && d[1] == d[3] && d[3] == d[5] { return true }
+        return false
+    }
+    
+    private static func isCommonWeak(_ code: String) -> Bool {
+        let weak = ["123456", "654321", "111111", "000000", "123123", "112233", "121212", "012345", "567890", "111222", "123321", "999999"]
+        return weak.contains(code)
+    }
+}
+
 // MARK: - Passcode Sheet (full screen)
 
 private struct PasscodeSheet: View {
@@ -536,8 +581,21 @@ private struct PasscodeSheet: View {
                             }
                         } else if step == .new {
                             entryStepContent(title: NSLocalizedString("New Passcode", comment: ""), subtitle: NSLocalizedString("Enter a new 6-digit passcode", comment: "")) {
-                                PasscodeEntryView(passcode: $newPasscode, length: 6) {
-                                    if newPasscode.count == 6 { step = .confirm }
+                                VStack(spacing: 20) {
+                                    PasscodeEntryView(passcode: $newPasscode, length: 6) {
+                                        if newPasscode.count == 6 {
+                                            let result = PasscodeStrength.check(newPasscode)
+                                            if result.allSatisfy(\.passed) {
+                                                step = .confirm
+                                            } else {
+                                                statusMessage = NSLocalizedString("Make it a bit stronger.", comment: "")
+                                                HapticFeedback.play(.warning)
+                                            }
+                                        }
+                                    }
+                                    if !newPasscode.isEmpty {
+                                        passcodeStrengthRulesView(passcode: newPasscode)
+                                    }
                                 }
                             }
                         } else if step == .confirm {
@@ -609,6 +667,40 @@ private struct PasscodeSheet: View {
             content()
         }
         .padding(.top, 24)
+    }
+    
+    @ViewBuilder
+    private func passcodeStrengthRulesView(passcode: String) -> some View {
+        let hasSix = passcode.count == 6
+        let results = hasSix ? PasscodeStrength.check(passcode) : []
+        let ruleIds = ["passcode_rule_not_sequential", "passcode_rule_not_repeated", "passcode_rule_not_repeating_pair", "passcode_rule_not_common"]
+        VStack(alignment: .leading, spacing: 10) {
+            Text(NSLocalizedString("Passcode rules", comment: ""))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AppTheme.colors.secondaryText)
+            ForEach(ruleIds, id: \.self) { id in
+                let r = results.first { $0.id == id }
+                HStack(spacing: 10) {
+                    if hasSix, let r = r {
+                        Image(systemName: r.passed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(r.passed ? AppTheme.colors.success : AppTheme.colors.error)
+                        Text(r.label)
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(r.passed ? AppTheme.colors.secondaryText : AppTheme.colors.error)
+                    } else {
+                        Image(systemName: "circle.dashed")
+                            .font(.system(size: 18))
+                            .foregroundStyle(AppTheme.colors.secondaryText.opacity(0.5))
+                        Text(NSLocalizedString(id, comment: ""))
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(AppTheme.colors.secondaryText)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 8)
     }
     
     private var showPasscodeStepContent: some View {

@@ -266,3 +266,9 @@
 "Erase everything" = "مسح كل شيء";
 "Terms of Use" = "سياسة الاستخدام";
 "Privacy Policy" = "سياسة الخصوصية";
+"Passcode rules" = "قواعد الرمز السري";
+"Make it a bit stronger." = "خليها أصعب شوي.";
+"passcode_rule_not_sequential" = "ليس تسلسلاً (مثل 123456 أو 654321)";
+"passcode_rule_not_repeated" = "ليس نفس الرقم مكرراً (مثل 111111)";
+"passcode_rule_not_repeating_pair" = "ليس نمطاً مكرراً (مثل 121212 أو 123123)";
+"passcode_rule_not_common" = "ليس رقماً ضعيفاً شائعاً (مثل 000000 أو 123456)";

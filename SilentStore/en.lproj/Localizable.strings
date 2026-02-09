@@ -266,3 +266,9 @@
 "Erase everything" = "Erase everything";
 "Terms of Use" = "Terms of Use";
 "Privacy Policy" = "Privacy Policy";
+"Passcode rules" = "Passcode rules";
+"Make it a bit stronger." = "Make it a bit stronger.";
+"passcode_rule_not_sequential" = "Not sequential (e.g. 123456 or 654321)";
+"passcode_rule_not_repeated" = "Not all same digit (e.g. 111111)";
+"passcode_rule_not_repeating_pair" = "Not repeating pattern (e.g. 121212 or 123123)";
+"passcode_rule_not_common" = "Not a common weak code (e.g. 000000, 123456)";
