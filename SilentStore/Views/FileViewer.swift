@@ -17,6 +17,7 @@ struct FileViewer: View {
     @State private var shareItem: ShareItem?
     @State private var tempShareURL: URL?
     @State private var archiveURL: URL?
+    @State private var documentPreviewURL: URL?
     
     // Video player state
     @State private var currentPlayer: AVPlayer?
@@ -217,17 +218,24 @@ struct FileViewer: View {
     }
     
     private var documentPreviewView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "doc")
-                .font(.system(size: 40))
-                .foregroundStyle(AppTheme.colors.accent)
-            Text("Preview not available")
-                .font(AppTheme.fonts.body)
-            Text("\(currentItem.mimeType) • \(ByteCountFormatter.string(fromByteCount: currentItem.size, countStyle: .file))")
-                .font(AppTheme.fonts.caption)
-                .foregroundStyle(AppTheme.colors.secondaryText)
+        Group {
+            if let url = documentPreviewURL, FileManager.default.fileExists(atPath: url.path) {
+                DocumentPreviewRepresentable(url: url)
+                    .ignoresSafeArea(.container, edges: .bottom)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "doc")
+                        .font(.system(size: 40))
+                        .foregroundStyle(AppTheme.colors.accent)
+                    Text("Preview not available")
+                        .font(AppTheme.fonts.body)
+                    Text("\(currentItem.mimeType) • \(ByteCountFormatter.string(fromByteCount: currentItem.size, countStyle: .file))")
+                        .font(AppTheme.fonts.caption)
+                        .foregroundStyle(AppTheme.colors.secondaryText)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     private var archiveInfoView: some View {
@@ -436,12 +444,22 @@ struct FileViewer: View {
                 // Load document data
                 let decrypted = try await vaultStore.decryptItemData(item)
                 await MainActor.run {
+                    if let prev = documentPreviewURL {
+                        try? FileManager.default.removeItem(at: prev)
+                        documentPreviewURL = nil
+                    }
                     data = decrypted
                     if isArchive {
                         do {
                             archiveURL = try writeTempArchive(data: decrypted)
                         } catch {
                             print("Failed to write archive: \(error)")
+                        }
+                    } else {
+                        do {
+                            documentPreviewURL = try writeTempDocument(data: decrypted)
+                        } catch {
+                            print("Failed to write temp document: \(error)")
                         }
                     }
                 }
@@ -681,6 +699,48 @@ struct FileViewer: View {
         removeEndObserver()
         currentPlayer = nil
         cancelChromeTimer()
+        if let documentPreviewURL {
+            try? FileManager.default.removeItem(at: documentPreviewURL)
+            self.documentPreviewURL = nil
+        }
+    }
+
+    private func writeTempDocument(data: Data) throws -> URL {
+        let ext = (currentItem.originalName as NSString).pathExtension
+        let suffix = ext.isEmpty ? ".dat" : ".\(ext)"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + suffix)
+        try data.write(to: url, options: [.atomic])
+        return url
+    }
+}
+
+// MARK: - Document Preview (QuickLook)
+
+private struct DocumentPreviewRepresentable: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {
+        uiViewController.dataSource = context.coordinator
+        uiViewController.reloadData()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(url: url)
+    }
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        let url: URL
+        init(url: URL) { self.url = url }
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+            url as QLPreviewItem
+        }
     }
 }
 
