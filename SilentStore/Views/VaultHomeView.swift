@@ -60,6 +60,10 @@ struct VaultHomeView: View {
         }
         .navigationTitle(pathStack.isEmpty ? NSLocalizedString("Files", comment: "") : pathStack.last ?? "")
         .navigationBarTitleDisplayMode(.large)
+        .navigationDestination(for: VaultItem.self) { item in
+            FileViewer(item: item)
+                .environmentObject(vaultStore)
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
@@ -321,10 +325,10 @@ struct VaultHomeView: View {
             }
             .background(AppTheme.gradients.background.ignoresSafeArea())
             if !selectionMode {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
+                Color.clear
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(false)
+                    .overlay(alignment: .bottomTrailing) {
                         Menu {
                             Button { showPhotoPicker = true } label: { Label(NSLocalizedString("Import from Photos", comment: ""), systemImage: "photo.on.rectangle") }
                             Button { showDocumentPicker = true } label: { Label(NSLocalizedString("Import Document", comment: ""), systemImage: "doc.badge.plus") }
@@ -343,13 +347,14 @@ struct VaultHomeView: View {
                         .padding(.trailing, 20)
                         .padding(.bottom, 20)
                     }
-                }
             }
             if selectionMode {
-                VStack {
-                    Spacer()
-                    selectionModeBar
-                }
+                Color.clear
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(false)
+                    .overlay(alignment: .bottom) {
+                        selectionModeBar
+                    }
             }
         }
         .sheet(isPresented: $showPhotoPicker) {
@@ -506,10 +511,7 @@ struct VaultHomeView: View {
                                 if selectionMode {
                                     ItemCard4Column(item: item, isSelected: selectedItems.contains(item.id)) { toggleSelection(for: item.id) }
                                 } else {
-                                    NavigationLink {
-                                        FileViewer(item: item)
-                                            .environmentObject(vaultStore)
-                                    } label: {
+                                    NavigationLink(value: item) {
                                         ItemCard4Column(
                                             item: item,
                                             isSelected: false,
@@ -647,10 +649,7 @@ struct VaultHomeView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 20) {
                         ForEach(recentItems.prefix(20)) { item in
-                            NavigationLink {
-                                FileViewer(item: item)
-                                    .environmentObject(vaultStore)
-                            } label: {
+                            NavigationLink(value: item) {
                                 StoryCircle(item: item)
                             }
                             .buttonStyle(.plain)
@@ -1019,8 +1018,14 @@ struct VaultHomeView: View {
         let folderForCheck = targetPath.isEmpty ? nil : targetPath
         let pathForAssign = targetPath
         let itemsToMove = vaultStore.items.filter { itemIDs.contains($0.id) }
-        let conflicts = itemsToMove.filter { vaultStore.existingItem(named: $0.originalName, inFolder: folderForCheck) != nil }
-        if conflicts.isEmpty {
+        let conflictsWithTarget = itemsToMove.filter { item in
+            guard let existing = vaultStore.existingItem(named: item.originalName, inFolder: folderForCheck) else { return false }
+            return existing.id != item.id
+        }
+        let nameCounts = Dictionary(grouping: itemsToMove, by: \.originalName)
+        let duplicateNamesInBatch = Set(nameCounts.filter { $0.value.count > 1 }.map(\.key))
+        let hasConflict = !conflictsWithTarget.isEmpty || !duplicateNamesInBatch.isEmpty
+        if !hasConflict {
             try? vaultStore.assignFolder(forIDs: itemIDs, folderPath: pathForAssign)
             moveItemIDs.removeAll()
             selectedItems.removeAll()
@@ -1035,27 +1040,32 @@ struct VaultHomeView: View {
 
     private func applyMoveConflictResolution(replace: Bool) {
         guard let targetPath = pendingMoveTargetPath else { return }
-        let ids = pendingMoveItemIDs
+        let ids = Array(pendingMoveItemIDs)
         let folderForCheck = targetPath.isEmpty ? nil : targetPath
         pendingMoveTargetPath = nil
         pendingMoveItemIDs = []
+        let itemsToMove = ids.compactMap { id in vaultStore.items.first(where: { $0.id == id }) }
+        var usedNamesInTarget = Set(vaultStore.items.filter { $0.folder == folderForCheck }.map(\.originalName))
 
         if replace {
-            for id in ids {
-                guard let item = vaultStore.items.first(where: { $0.id == id }) else { continue }
-                if let existing = vaultStore.existingItem(named: item.originalName, inFolder: folderForCheck), existing.id != id {
+            for item in itemsToMove {
+                if usedNamesInTarget.contains(item.originalName) { continue }
+                if let existing = vaultStore.existingItem(named: item.originalName, inFolder: folderForCheck), existing.id != item.id {
                     try? vaultStore.deleteItems(ids: [existing.id])
                 }
+                try? vaultStore.assignFolder(forIDs: [item.id], folderPath: targetPath)
+                usedNamesInTarget.insert(item.originalName)
             }
-            try? vaultStore.assignFolder(forIDs: ids, folderPath: targetPath)
         } else {
-            for id in ids {
-                guard let item = vaultStore.items.first(where: { $0.id == id }) else { continue }
-                if vaultStore.existingItem(named: item.originalName, inFolder: folderForCheck) != nil {
-                    let newName = vaultStore.uniqueItemName(base: item.originalName, inFolder: folderForCheck)
-                    try? vaultStore.renameItem(id: id, newName: newName)
+            for item in itemsToMove {
+                let finalName = usedNamesInTarget.contains(item.originalName)
+                    ? vaultStore.uniqueItemName(base: item.originalName, inFolder: folderForCheck)
+                    : item.originalName
+                usedNamesInTarget.insert(finalName)
+                if finalName != item.originalName {
+                    try? vaultStore.renameItem(id: item.id, newName: finalName)
                 }
-                try? vaultStore.assignFolder(forIDs: [id], folderPath: targetPath)
+                try? vaultStore.assignFolder(forIDs: [item.id], folderPath: targetPath)
             }
         }
         selectedItems.removeAll()

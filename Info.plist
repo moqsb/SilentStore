@@ -6,27 +6,29 @@
 	<string>SilentStore</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIconFile</key>
+	<string>icon</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-	<key>CFBundleShortVersionString</key>
-	<string>$(MARKETING_VERSION)</string>
-	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>en</string>
 		<string>ar</string>
 	</array>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
-	<key>NSFaceIDUsageDescription</key>
-	<string>Use Face ID to unlock your encrypted vault.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Allow access to import photos and videos into your vault.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Allow access to save encrypted media into your vault.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Allow access to capture photos for your vault.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Use Face ID to unlock your encrypted vault.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Allow access to save encrypted media into your vault.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Allow access to import photos and videos into your vault.</string>
 	<key>NSUserNotificationUsageDescription</key>
 	<string>Allow notifications for your secure vault reminders.</string>
 	<key>UIApplicationSceneManifest</key>

@@ -53,18 +53,6 @@ struct SettingsView: View {
                             settingsNavRow(icon: "paintbrush.fill", title: NSLocalizedString("Theme", comment: ""), subtitle: themeDisplayName) {
                                 ThemeOptionsView(appearanceMode: $appearanceMode)
                             }
-                            settingsDivider()
-                            settingsNavRow(icon: "photo.fill", title: NSLocalizedString("Wallpaper", comment: "")) {
-                                WallpaperPickerView()
-                            }
-                            settingsDivider()
-                            settingsNavRow(icon: "square.and.arrow.down.fill", title: NSLocalizedString("Backup", comment: "")) {
-                                BackupSettingsView()
-                            }
-                            settingsDivider()
-                            settingsNavRow(icon: "clock.fill", title: NSLocalizedString("History", comment: "")) {
-                                HistoryView()
-                            }
                         }
                         
                         settingsSection(NSLocalizedString("Notifications", comment: "")) {
@@ -76,46 +64,22 @@ struct SettingsView: View {
                                         ReminderManager.shared.cancelReminder()
                                     }
                                 }
-                            settingsDivider()
-                            settingsToggleRow(icon: "person.2.fill", title: NSLocalizedString("Group Notifications", comment: ""), isOn: .constant(false))
-                            settingsDivider()
-                            settingsToggleRow(icon: "bell.fill", title: NSLocalizedString("In-App Sounds", comment: ""), isOn: .constant(true))
                         }
                         
                         settingsSection(NSLocalizedString("Storage and Data", comment: "")) {
-                            settingsNavRow(icon: "antenna.radiowaves.left.and.right", title: NSLocalizedString("Network Usage", comment: "")) {
-                                NetworkUsageView()
-                            }
-                            settingsDivider()
                             settingsNavRow(icon: "internaldrive.fill", title: NSLocalizedString("Storage Usage", comment: ""), subtitle: storageSummaryText) {
                                 StorageDashboard(vaultStore: vaultStore)
-                            }
-                            settingsDivider()
-                            settingsNavRow(icon: "arrow.down.circle.fill", title: NSLocalizedString("Media Auto-Download", comment: "")) {
-                                AutoDownloadView()
                             }
                         }
                         
                         settingsSection(NSLocalizedString("Help", comment: "")) {
-                            settingsNavRow(icon: "questionmark.circle.fill", title: NSLocalizedString("FAQ", comment: "")) {
-                                FAQView()
-                            }
-                            settingsDivider()
-                            settingsNavRow(icon: "envelope.fill", title: NSLocalizedString("Contact Support", comment: "")) {
-                                ContactSupportView()
-                            }
-                            settingsDivider()
                             settingsNavRow(icon: "doc.text.fill", title: NSLocalizedString("Terms & Privacy Policy", comment: "")) {
                                 PrivacyView()
                             }
                         }
                         
                         settingsSection(NSLocalizedString("App Info", comment: "")) {
-                            settingsNavRow(icon: "info.circle.fill", title: NSLocalizedString("Version", comment: ""), subtitle: appVersion) {
-                                AboutView()
-                            }
-                            settingsDivider()
-                            settingsNavRow(icon: "info.circle.fill", title: NSLocalizedString("About", comment: "")) {
+                            settingsNavRow(icon: "info.circle.fill", title: NSLocalizedString("About", comment: ""), subtitle: appVersion) {
                                 AboutView()
                             }
                         }
@@ -154,42 +118,34 @@ struct SettingsView: View {
     // MARK: - Profile Card
     
     private var profileCard: some View {
-        NavigationLink {
-            ProfileEditView()
-        } label: {
-            HStack(spacing: 16) {
-                ZStack {
-                    Circle()
-                        .fill(AppTheme.gradients.accent)
-                        .frame(width: 56, height: 56)
-                    Image(systemName: "lock.shield.fill")
-                        .font(.system(size: 26))
-                        .foregroundStyle(.white)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(NSLocalizedString("SilentStore", comment: ""))
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(AppTheme.colors.primaryText)
-                    Text(NSLocalizedString("Secure Vault", comment: ""))
-                        .font(.system(size: 14))
-                        .foregroundStyle(AppTheme.colors.secondaryText)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(AppTheme.colors.secondaryText.opacity(0.6))
+        HStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(AppTheme.gradients.accent)
+                    .frame(width: 56, height: 56)
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(.white)
             }
-            .padding(16)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(AppTheme.colors.cardBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(AppTheme.colors.cardBorder, lineWidth: 1)
-                    )
-            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(NSLocalizedString("SilentStore", comment: ""))
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(AppTheme.colors.primaryText)
+                Text(NSLocalizedString("Secure Vault", comment: ""))
+                    .font(.system(size: 14))
+                    .foregroundStyle(AppTheme.colors.secondaryText)
+            }
+            Spacer()
         }
-        .buttonStyle(.plain)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(AppTheme.colors.cardBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AppTheme.colors.cardBorder, lineWidth: 1)
+                )
+        )
     }
     
     // MARK: - Section & Rows
@@ -345,28 +301,6 @@ struct SettingsView: View {
 
 // MARK: - Supporting Views
 
-private struct ProfileEditView: View {
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            VStack {
-                Text("Profile Edit")
-                    .font(.title2)
-                Text("Coming soon")
-                    .foregroundStyle(.secondary)
-            }
-            .navigationTitle(NSLocalizedString("Edit Profile", comment: ""))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
 private struct PrivacySettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("aiEnabled") private var aiEnabled = false
@@ -497,160 +431,6 @@ private struct ThemeOptionsView: View {
                 }
             }
             .navigationTitle(NSLocalizedString("Theme", comment: ""))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
-private struct WallpaperPickerView: View {
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            VStack {
-                Text("Wallpaper")
-                    .font(.title2)
-                Text("Coming soon")
-                    .foregroundStyle(.secondary)
-            }
-            .navigationTitle(NSLocalizedString("Wallpaper", comment: ""))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
-private struct BackupSettingsView: View {
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            VStack {
-                Text("Backup")
-                    .font(.title2)
-                Text("Coming soon")
-                    .foregroundStyle(.secondary)
-            }
-            .navigationTitle(NSLocalizedString("Backup", comment: ""))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
-private struct HistoryView: View {
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            VStack {
-                Text("History")
-                    .font(.title2)
-                Text("Coming soon")
-                    .foregroundStyle(.secondary)
-            }
-            .navigationTitle(NSLocalizedString("History", comment: ""))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
-private struct NetworkUsageView: View {
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            VStack {
-                Text("Network Usage")
-                    .font(.title2)
-                Text("Coming soon")
-                    .foregroundStyle(.secondary)
-            }
-            .navigationTitle(NSLocalizedString("Network Usage", comment: ""))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
-private struct AutoDownloadView: View {
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            VStack {
-                Text("Auto-Download")
-                    .font(.title2)
-                Text("Coming soon")
-                    .foregroundStyle(.secondary)
-            }
-            .navigationTitle(NSLocalizedString("Media Auto-Download", comment: ""))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
-private struct FAQView: View {
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            VStack {
-                Text("FAQ")
-                    .font(.title2)
-                Text("Coming soon")
-                    .foregroundStyle(.secondary)
-            }
-            .navigationTitle(NSLocalizedString("FAQ", comment: ""))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
-private struct ContactSupportView: View {
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationStack {
-            VStack {
-                Text("Contact Support")
-                    .font(.title2)
-                Text("Coming soon")
-                    .foregroundStyle(.secondary)
-            }
-            .navigationTitle(NSLocalizedString("Contact Support", comment: ""))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {

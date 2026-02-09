@@ -29,6 +29,7 @@ final class VaultStore: ObservableObject {
 
     private let context: NSManagedObjectContext
     private var isPrepared = false
+    private var preparationTask: Task<Void, Never>?
     @Published private(set) var items: [VaultItem] = []
     @Published private(set) var pinnedIDs: Set<UUID> = []
     @Published private(set) var isLoading = false
@@ -44,21 +45,29 @@ final class VaultStore: ObservableObject {
     }
 
     func prepareIfNeeded() async {
-        guard !isPrepared else { return }
-        isLoading = true
-        isReady = false
-        defer { isLoading = false }
-        do {
-            _ = try await KeyManager.shared.getOrCreateMasterKey()
-            try migrateLegacyIfNeeded()
-            try loadItems()
-            isPrepared = true
-            isReady = true
-        } catch {
-            print("VaultStore prepare failed: \(error)")
-            isPrepared = false
-            isReady = false
+        if isPrepared { return }
+        if let existing = preparationTask {
+            await existing.value
+            return
         }
+        let task = Task {
+            isLoading = true
+            isReady = false
+            defer { isLoading = false; preparationTask = nil }
+            do {
+                _ = try await KeyManager.shared.getOrCreateMasterKey()
+                try migrateLegacyIfNeeded()
+                try loadItems()
+                isPrepared = true
+                isReady = true
+            } catch {
+                print("VaultStore prepare failed: \(error)")
+                isPrepared = false
+                isReady = false
+            }
+        }
+        preparationTask = task
+        await task.value
     }
 
     func refresh() async {
@@ -74,6 +83,7 @@ final class VaultStore: ObservableObject {
     }
 
     func markLocked() {
+        preparationTask = nil
         isPrepared = false
         isReady = false
     }
